@@ -31,16 +31,15 @@ Scaling conventions
 The decision rule in :mod:`orbitmatch.policy.predictive` uses normalized
 quantities:
 
-- Value function ``V_i(j; t)`` is computed as a raw lambda_2 marginal
-  contribution and returns a value in [0, 2H], where H is the lookahead
-  horizon. The decision rule divides by ``2H`` to produce a normalized
-  ``V_tilde`` in [0, 1].
-- Switching cost is the angular deviation ``angle(theta_i, hat_theta_ij)``
-  in radians, returned in [0, pi] by ``_switching_cost``. The decision
-  rule divides by ``pi`` to produce ``C_tilde`` in [0, 1].
-- ``switching_cost_scale`` (parameter ``c``) is the maximum fraction of
-  normalized value that a full pi-radian slew can offset. It must lie in
-  [0, 1] and defaults to 0.2.
+- Value function ``V_i(j; t)`` is computed as the marginal contribution
+  of edge (i, j) to the *negative effective resistance* (Kirchhoff
+  index) of the policy's internal evaluation graph
+  ``Phi(t) + epsilon * L_union_F``. Returns a non-negative raw value
+  whose magnitude depends on the graph state. The decision rule
+  normalizes by the per-satellite max over its candidates to produce
+  ``V_tilde`` in [0, 1] for combining with the switching cost. The
+  per-satellite normalization preserves argmax within each satellite's
+  candidate set.
 
 This corresponds to the paper's §III.B-§III.D scaling. Raw values are
 preserved for diagnostics and for the §IV potential-game analysis.
@@ -87,6 +86,13 @@ class PolicyParams:
         ``p_ij * [V_tilde - c * C_tilde]``. Must lie in [0, 1]; it is
         the maximum fraction of normalized value that a full slew can
         offset. Default 0.2.
+    epsilon_geometric_prior
+        Weight on the feasibility-union Laplacian in the policy's
+        internal evaluation graph: V_i is computed on
+        Phi(t) + epsilon * L_union_F. This encodes common-knowledge
+        orbital geometry as a soft prior on connectivity, ensuring
+        the value function is well-defined even when Phi is
+        disconnected (as it is at startup). Default 0.01.
     tie_break
         How to break ties in the argmax over candidate partners.
         ``"lowest_index"`` is deterministic; ``"random"`` uses the
@@ -98,6 +104,7 @@ class PolicyParams:
     H: int = 10
     T: int = 30
     switching_cost_scale: float = 0.2
+    epsilon_geometric_prior: float = 0.01
     tie_break: str = "lowest_index"
     seed: Optional[int] = None
 
@@ -108,6 +115,11 @@ class PolicyParams:
             raise ValueError(f"T must be positive; got {self.T}.")
         if not (0.0 <= self.switching_cost_scale <= 1.0):
             raise ValueError(f"switching_cost_scale must be in [0, 1]; got {self.switching_cost_scale}.")
+        if self.epsilon_geometric_prior <= 0.0:
+            raise ValueError(
+                f"epsilon_geometric_prior must be positive; "
+                f"got {self.epsilon_geometric_prior}."
+            )
         if self.tie_break not in {"lowest_index", "random"}:
             raise ValueError(f"tie_break must be 'lowest_index' or 'random'; got {self.tie_break!r}.")
 
