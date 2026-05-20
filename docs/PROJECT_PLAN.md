@@ -53,7 +53,7 @@ Pair $(i,j)$ is feasible at epoch $t$ iff all three hold:
 
 - **Line of sight.** Chord from $r_i(t)$ to $r_j(t)$ clears Earth plus
   atmospheric buffer of $h_\mathrm{atm} = 80$ km above the surface.
-- **Range.** $\|r_i(t) - r_j(t)\| \leq d_\mathrm{max}$ with $d_\mathrm{max} = 5000$ km.
+- **Range.** $\|r_i(t) - r_j(t)\| \leq d_\mathrm{max}$ with $d_\mathrm{max} = 8000$ km.
 - **Pointing rate.** $\|\dot{\hat{u}}_{ij}(t)\|_2 \leq \omega_\mathrm{max}$ with
   $\omega_\mathrm{max} = 1°/\mathrm{s} \approx 0.01745\ \mathrm{rad/s}$.
 
