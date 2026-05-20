@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.installed.cfg
+.eggs/
+*.egg
+.cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Project-specific: regeneratable artifacts (commit code, not data)
+data/raw/*.bsp
+data/raw/*.tle
+data/processed/*.npz
+data/processed/*.parquet
+data/traces/*.npz
+data/traces/*.parquet
+results/**/*.npz
+results/**/*.parquet
+results/**/*.pkl
+figures/**/*.pdf
+figures/**/*.png
+tables/*.tex
+tables/*.csv
+
+# But DO keep the directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/traces/.gitkeep
+!results/**/.gitkeep
+!figures/**/.gitkeep
+!tables/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# LaTeX intermediates
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.toc

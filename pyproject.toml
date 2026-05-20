@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbitmatch"
+version = "0.1.0"
+description = "Predictive matching for inter-satellite link formation in LEO constellations"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Ruiqi Li"},
+    {name = "Shiva Shakeri"},
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "skyfield>=1.46",
+    "pyyaml>=6.0",
+    "pandas>=2.1",
+    "tqdm>=4.66",
+    "joblib>=1.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "black>=24.0",
+    "ruff>=0.3",
+    "ipykernel>=6.29",
+]
+
+[tool.setuptools.packages.find]
+include = ["orbitmatch*"]
+exclude = ["tests*", "scripts*", "docs*", "paper*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --cov=orbitmatch --cov-report=term-missing"
