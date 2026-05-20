@@ -50,4 +50,28 @@ atm_buffer 80 km, range_max 8000 km, rate_max 1°/s, dt 10 s.
 - `data/processed/feas_walker_small_24_4_1_alt550_inc53_dt10_*.npz`
 - `data/processed/feas_walker_medium_60_6_2_alt550_inc53_dt10_*.npz`
 
+## 2026-05-20 — Theory revision: union-graph certificate, effective-resistance value
 
+Two substantive changes to the paper and a cascade of code edits:
+
+1. Certificate moved from windowed sum to union graph. The theorem
+   guarantee is now on lambda_2(L_union_G(t; T)) >= rho * alpha_0,
+   per the joint-connectivity framework of Jadbabaie-Lin-Morse (2003).
+   The windowed Laplacian Phi(t) is retained as the policy's internal
+   smoothing surrogate.
+
+2. Value function switched from lambda_2 marginal to Kirchhoff-index
+   (effective resistance) marginal, evaluated on Phi(t) + epsilon *
+   L_union_F. The epsilon term encodes common-knowledge orbital
+   geometry as a soft prior on the evaluation graph; it is *not* a
+   regularization device, and it does not appear in the certificate.
+
+3. Switching cost normalized to [0, 1] by dividing the angular slew
+   by pi. Switching-cost scale c now in [0, 1] with the interpretation
+   "max fraction of normalized value a full slew can offset."
+
+Empirical (small config, full orbit, T=60, c=0.2, epsilon=0.01):
+  mean lambda_2(Phi) = 1.74 (above alpha_0 = 0.92 geometric ceiling)
+  zero-connectivity epochs = 0 / 513
+  mean edges/epoch = 9.86 / 12 max
+  total deferrals = 3030 over 573 epochs
