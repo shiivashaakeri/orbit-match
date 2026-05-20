@@ -5,7 +5,7 @@ This document is the source of truth for the simulation companion to the ACC pap
 architecture, conventions, experiment design, and the running task list. Edit it
 when decisions change.
 
-Last reviewed: 2026-05-20.
+Last reviewed: 2026-05-20 (theory revision: union-graph certificate, Kirchhoff-based value function).
 
 ---
 
@@ -14,9 +14,11 @@ Last reviewed: 2026-05-20.
 The simulation has three jobs:
 
 1. **Validate the analytical results of §IV.** Show empirically that the
-   predictive matching policy achieves $\lambda_2(\Phi(t)) \geq \rho \cdot
-   \alpha_0$ for a representative LEO constellation, with $\rho$ in the
-   theorem-predicted range.
+   predictive matching policy achieves $\lambda_2(L^\cup_\mathcal{G}(t; T))
+   \geq \rho \cdot \alpha_0$ for a representative LEO constellation, with
+   $\rho$ in the theorem-predicted range. The certificate is on the
+   *realized union graph*; the windowed Laplacian $\Phi(t)$ is tracked as
+   a secondary metric for diagnostics.
 2. **Compare against baselines.** Demonstrate that reciprocation prediction is
    doing real work — predictive matching outperforms greedy local value and
    random matching, and approaches the equilibrium ceiling.
@@ -67,11 +69,42 @@ unit-bearing vector across one epoch.
 
 ### 2.4 Switching cost
 
-$$C^\text{switch}_{ij}(t) = c \cdot \angle(\theta_i(t), \hat{\theta}_{ij}(t))$$
+The raw switching cost is the angular slew $\angle(\theta_i(t-1),
+\hat{\theta}_{ij}(t)) \in [0, \pi]$. The normalized form used by the
+decision rule is
 
-with $c$ tuned at start so that mean $C^\text{switch}$ over feasible pairs is
-~10% of mean per-edge $\Delta \lambda_2$. The exact value of $c$ is reported in
+$$\tilde C^\text{switch}_{ij}(t) = \frac{\angle(\theta_i(t-1), \hat{\theta}_{ij}(t))}{\pi} \in [0, 1].$$
+
+The scaling parameter $c \in [0, 1]$ is the maximum fraction of normalized
+value a full $\pi$-radian slew can offset. Default $c = 0.2$. The actual
+value used is reported in
 the experiment log once tuned.
+
+### 2.5 Value function: effective resistance with geometric prior
+
+The policy ranks candidate edges by their marginal decrease in the
+*Kirchhoff index* (sum of inverse non-zero Laplacian eigenvalues) of an
+*evaluation graph*:
+
+$$\Phi_\varepsilon(t) = \Phi(t) + \varepsilon \cdot L^\cup_\mathcal{F},$$
+
+where $\Phi(t)$ is the windowed sum of realized matching Laplacians and
+$\varepsilon L^\cup_\mathcal{F}$ is a soft geometric prior derived from
+the feasibility union (common knowledge by Assumption that orbits are
+known).
+
+The raw value is
+
+$$V_i(j; t) = \sum_{\tau=0}^{H-1} \big[\Omega(\Phi_\varepsilon(t+\tau)) - \Omega(\Phi_\varepsilon(t+\tau) + L_{(i,j)})\big] \cdot \mathbf{1}\{(i,j) \in \mathcal{F}(t+\tau)\}.$$
+
+Larger drops = better connectivity contribution. The normalized form
+$\tilde V_i = V_i / \max_k V_i(k;t)$ is applied at the decision
+boundary; per-satellite normalization preserves argmax within each
+satellite's candidate set.
+
+The certificate (Theorem 6) is on the realized union graph
+$\mathcal{G}^\cup(t; T)$, which contains no $\varepsilon$ term. The
+regularization is purely a device of the value function.
 
 ---
 
@@ -82,7 +115,8 @@ the experiment log once tuned.
 | $H$              | Lookahead horizon (epochs)       | 10      | {1, 5, 10, 20, 50}   |
 | $T$              | Certificate window length        | 30      | {10, 30, 60, 100}    |
 | $T_0$            | Feasibility window               | computed| n/a (geometry)       |
-| $c$              | Switching cost scale             | tuned   | {0, 0.1, 1.0, 10.0} × |
+| $c$              | Switching cost scale             | 0.2     | {0, 0.1, 0.3, 0.5}   |
+| $\varepsilon$    | Geometric-prior weight           | 0.01    | {0.001, 0.01, 0.1}   |
 | One-step BR      | Reciprocation predictor          | fixed   | (extension only)     |
 
 Reciprocation predictor is fixed at one-step throughout (per §III.C). The
@@ -110,7 +144,7 @@ change to feasibility or graph code.
 
 | ID  | Check                                                              | Pass criterion                                      |
 |-----|--------------------------------------------------------------------|-----------------------------------------------------|
-| S1  | Feasibility-union graph $\mathcal{F}^\cup(t; T_0)$ connected       | $\lambda_2(L^\cup) > 0$ for all $t$, $T_0 = T_\mathrm{orb}$ |
+| S1  | Feasibility-union graph $\mathcal{F}^\cup(t; T_0)$ connected       | $\lambda_2(L^\cup_\mathcal{F}) > 0$ for all $t$, $T_0 = T_\mathrm{orb}$ |
 | S2  | $\alpha_0$ empirically computed                                    | Reported in `results/diagnostics/alpha_0.npz`       |
 | S3  | Deferral mechanism fires                                           | $\geq 5\%$ of epochs have $p_{ij^\star} = 0$ for some $i$ |
 | S4  | BR dynamics monotone improvement                                   | $W_t$ non-decreasing across rounds in `equilibrium` |
@@ -120,10 +154,10 @@ change to feasibility or graph code.
 
 | Plot  | Script                                | Config        | Output                                  | Description |
 |-------|---------------------------------------|---------------|-----------------------------------------|-------------|
-| **1** | `scripts.run_lambda2_traces`          | medium (60)   | `figures/paper/fig1_lambda2_traces.pdf` | $\lambda_2(\Phi(t))$ over time for all 4 policies + theorem line |
+| **1** | `scripts.run_lambda2_traces`          | medium (60)   | `figures/paper/fig1_lambda2_traces.pdf` | $\lambda_2(L^\cup_\mathcal{G}(t; T))$ over time for all 4 policies, with $\rho \alpha_0$ reference line. $\lambda_2(\Phi(t))$ shown as secondary curve. |
 | **2** | `scripts.run_horizon_ablation`        | small (24)    | `figures/paper/fig2_horizon_ablation.pdf` | Time-averaged $\bar{\lambda}_2$ vs. $H$, 5 seeds, error bars |
 | **3** | `scripts.run_scaling`                 | $n$ varies    | `figures/paper/fig3_scaling.pdf`        | $\bar{\lambda}_2 / \alpha_0$ vs. $n$, predictive vs. greedy |
-| **4** | `scripts.run_robustness` *(optional)* | medium (60)   | `figures/paper/fig4_robustness.pdf`     | $\lambda_2(\Phi(t))$ before/after 5-sat dropout, recovery comparison |
+| **4** | `scripts.run_robustness` *(optional)* | medium (60)   | `figures/paper/fig4_robustness.pdf`     | $\lambda_2(L^\cup_\mathcal{G}(t; T))$ before/after 5-sat dropout, recovery comparison |
 
 Plot 4 runs locally but only goes in the paper if §V has space.
 
@@ -131,7 +165,7 @@ Plot 4 runs locally but only goes in the paper if §V has space.
 
 | Table | Script | Output | Description |
 |-------|--------|--------|-------------|
-| 1 | `scripts.render_tables` | `tables/tab1_summary.tex` | Per-policy mean/std/min of $\lambda_2(\Phi)$ for both configs |
+| 1 | `scripts.render_tables` | `tables/tab1_summary.tex` | Per-policy mean/std/min of $\lambda_2(L^\cup_\mathcal{G})$ and $\lambda_2(\Phi)$ for both configs |
 | 2 | `scripts.render_tables` | `tables/tab2_efficiency.tex` | Empirical $\rho_\mathrm{match}$, $\rho_\mathrm{cover}$, $\rho$ vs. theorem bound |
 
 ---
@@ -201,7 +235,7 @@ scripts/run_*.py
   the config — cache in `data/processed/` with a content-hashed filename, e.g.
   `positions_walker_24_4_1_alt550_inc53_dt10_horizon3orb_{hash8}.npz`.
 - **Simulation traces** save *everything* needed to redraw plots: per-epoch
-  $\lambda_2(\Phi(t))$, realized matchings as edge lists, diagnostics, policy
+  $\lambda_2(L^\cup_\mathcal{G}(t; T))$, $\lambda_2(\Phi(t))$, realized matchings as edge lists, diagnostics, policy
   config, seed. Saved to `results/{experiment}/{policy}_{config}_{hash}.npz`.
 - **Never re-run a simulation that already has a saved trace.** All
   `render_*.py` scripts read from `results/` and produce figures; they do not
@@ -290,8 +324,7 @@ For Claude (in-conversation):
       a tighter ceiling than `equilibrium`. Probably not worth it.
 - [ ] Pointing-rate threshold $\omega_\text{max}$: 1°/s is conservative.
       A reviewer might ask why not 0.5°/s. Sensitivity ablation if space allows.
-- [ ] Should switching cost $c$ be reported in radian-adjusted units to make
-      the scale interpretable?
+- [x] Switching cost $c$ now in $[0, 1]$ after normalizing $\tilde C^\text{switch}$ by $\pi$. Clean interpretation as max fraction of value offset by full slew.
 
 ---
 
