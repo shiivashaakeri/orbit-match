@@ -50,28 +50,71 @@ atm_buffer 80 km, range_max 8000 km, rate_max 1°/s, dt 10 s.
 - `data/processed/feas_walker_small_24_4_1_alt550_inc53_dt10_*.npz`
 - `data/processed/feas_walker_medium_60_6_2_alt550_inc53_dt10_*.npz`
 
-## 2026-05-20 — Theory revision: union-graph certificate, effective-resistance value
+## 2026-05-20 — Theory revision: union-graph certificate, Kirchhoff value function
 
-Two substantive changes to the paper and a cascade of code edits:
+Three substantive theoretical changes, with a cascade of code edits.
 
-1. Certificate moved from windowed sum to union graph. The theorem
-   guarantee is now on lambda_2(L_union_G(t; T)) >= rho * alpha_0,
+### Changes
+
+1. **Certificate moved from windowed sum to union graph.** The theorem
+   now guarantees $\lambda_2(L^\cup_\mathcal{G}(t; T)) \geq \rho \alpha_0$,
    per the joint-connectivity framework of Jadbabaie-Lin-Morse (2003).
-   The windowed Laplacian Phi(t) is retained as the policy's internal
-   smoothing surrogate.
+   The windowed Laplacian $\Phi(t)$ is retained as the policy's internal
+   smoothing surrogate but is no longer the certified object.
 
-2. Value function switched from lambda_2 marginal to Kirchhoff-index
-   (effective resistance) marginal, evaluated on Phi(t) + epsilon *
-   L_union_F. The epsilon term encodes common-knowledge orbital
-   geometry as a soft prior on the evaluation graph; it is *not* a
-   regularization device, and it does not appear in the certificate.
+2. **Value function switched from $\lambda_2$ marginal to Kirchhoff index
+   marginal**, evaluated on $\Phi(t) + \varepsilon L^\cup_\mathcal{F}$.
+   The $\lambda_2$ marginal is a step function in edge additions and
+   gives zero gradient on disconnected graphs (which $\Phi$ is, at
+   simulation start and intermittently afterward). The Kirchhoff
+   marginal is smooth and gives a meaningful gradient throughout. The
+   $\varepsilon L^\cup_\mathcal{F}$ term encodes common-knowledge
+   orbital geometry as a soft prior; it does not appear in the
+   certificate.
 
-3. Switching cost normalized to [0, 1] by dividing the angular slew
-   by pi. Switching-cost scale c now in [0, 1] with the interpretation
+3. **All decision-rule quantities normalized to $[0, 1]$.** The value
+   function uses per-satellite normalization $\tilde V_i = V_i /
+   \max_k V_i(k;t)$. The switching cost uses fixed normalization
+   $\tilde C^\text{switch}_{ij} = \angle(\cdot,\cdot)/\pi$. The
+   switching-cost scale $c$ now in $[0, 1]$ with the interpretation
    "max fraction of normalized value a full slew can offset."
 
-Empirical (small config, full orbit, T=60, c=0.2, epsilon=0.01):
-  mean lambda_2(Phi) = 1.74 (above alpha_0 = 0.92 geometric ceiling)
-  zero-connectivity epochs = 0 / 513
-  mean edges/epoch = 9.86 / 12 max
-  total deferrals = 3030 over 573 epochs
+### Implementation
+
+- `orbitmatch/graph/spectral.py`: added `kirchhoff_index`.
+- `orbitmatch/policy/base.py`: removed `epsilon_union`, added
+  `epsilon_geometric_prior`. `switching_cost_scale` validation tightened
+  to $[0, 1]$, default $0.2$.
+- `orbitmatch/policy/predictive.py`: rewrote `_value` to compute
+  Kirchhoff drops. Rewrote `decide_for`, `_reciprocation_prob`,
+  `_top_value_partner` to use per-satellite normalization. Removed
+  cold-start `_NUMERICAL_FLOOR` and `_COLD_START_EPS` constants
+  (subsumed by the geometric-prior regularization).
+
+### Empirical: small config (24, 4, 1), full orbit, $T=60$, $c=0.2$, $\varepsilon=0.01$
+
+| Metric                       | Value             |
+|------------------------------|-------------------|
+| Mean $\lambda_2(\Phi)$       | 1.74 (vs $\alpha_0 = 0.92$ geometric ceiling) |
+| Mean edges per epoch         | 9.86 / 12 max     |
+| Zero-$\lambda_2(\Phi)$ epochs | 0 / 513          |
+| Total deferrals              | 3030              |
+| Final-window components      | 1                 |
+| Final-window isolated sats   | 0                 |
+
+### Outcomes
+
+- The Kirchhoff value function gives a smooth, structure-aware gradient
+  that the previous $\lambda_2$-based formulation lacked.
+- $\lambda_2(\Phi)$ now exceeds the geometric ceiling $\alpha_0$ in
+  steady state, reflecting that the windowed sum accumulates multiple
+  matchings (each matching's $\lambda_2$ alone is bounded by $\alpha_0$;
+  the sum can be larger).
+- The medium-config run was abandoned mid-flight under the old
+  formulation. To be re-run under the new formulation as the first
+  step of Phase 2.
+
+### Artifacts
+
+- `data/processed/feas_walker_small_24_4_1_alt550_inc53_dt10_*.npz` (unchanged)
+- `data/processed/feas_walker_medium_60_6_2_alt550_inc53_dt10_*.npz` (unchanged)
