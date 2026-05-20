@@ -111,6 +111,57 @@ def eigenvalues(L: np.ndarray) -> np.ndarray:
     eigs = np.linalg.eigvalsh(L)
     return np.maximum(eigs, 0.0)
 
+def kirchhoff_index(L: np.ndarray, *, floor: float = 1e-9) -> float:
+    """Kirchhoff index (total effective resistance) of a graph Laplacian.
+
+    Computes Omega(L) = sum_{k >= 2} 1 / lambda_k, where {lambda_k} are
+    the eigenvalues of L in ascending order. The smallest eigenvalue is
+    always 0 (with eigenvector 1) and is skipped.
+
+    For a connected graph, this quantity is finite. It is related to
+    the total effective resistance R(G) = sum over all unordered pairs
+    (i, j) of the effective resistance between i and j by
+
+        R(G) = n * Omega(L),
+
+    where each edge is treated as a unit resistor. Smaller Omega means
+    a better-connected graph. The factor of n does not matter for the
+    use here, which is to compare values across candidate edges within
+    the same graph: the marginal effect of adding an edge is
+
+        Delta Omega = Omega(L + L_edge) - Omega(L),
+
+    and this is independent of the scaling convention.
+
+    For a disconnected graph, more than one eigenvalue is zero (one per
+    component), and Omega would diverge. The ``floor`` argument is the
+    threshold below which an eigenvalue is treated as zero; eigenvalues
+    below this floor are excluded from the sum. For a genuinely
+    disconnected graph this returns the Kirchhoff index of the
+    connected components alone, which is finite but smaller than the
+    "full" Omega; callers should regularize the Laplacian before
+    calling if they need a strictly increasing-with-edges quantity.
+
+    Parameters
+    ----------
+    L
+        Symmetric positive-semidefinite Laplacian of shape ``(n, n)``.
+    floor
+        Eigenvalues below this threshold are excluded as numerical zero.
+
+    Returns
+    -------
+    float
+        Omega(L). Strictly positive for any non-trivial graph; smaller
+        is more connected.
+    """
+    eigs = np.linalg.eigvalsh(L)
+    # Exclude the zero eigenvalues (one per connected component).
+    nonzero = eigs[eigs > floor]
+    if len(nonzero) == 0:
+        return 0.0
+    return float(np.sum(1.0 / nonzero))
+
 
 # ---------------------------------------------------------------------------
 # Cached lambda_2 of a matching
