@@ -1,32 +1,29 @@
 # orbit-match/scripts/run_consensus.py
 # Run: python -m scripts.run_consensus
 
-"""Discrete-time average consensus on realized matchings.
+"""Discrete-time average consensus on the realized matching sequence.
 
-This script validates the corollary to Theorem 6: the certificate
-lambda_2(L^cup_G(t; T)) >= rho * alpha_0 > 0 uniformly in t implies
-that discrete-time average consensus on the realized matching graph
-G(t) converges geometrically.
-
-Procedure
----------
-For each canonical trace in results/canonical/fig1/ (predictive,
-greedy, random), iterate:
+This script demonstrates that Theorem 6's certificate implies geometric
+consensus convergence on the realized network. Per the corollary, when
+the rolling-window union $\\mathcal{G}^\\cup(t; T)$ satisfies
+$\\lambda_2 \\geq \\rho \\alpha_0 > 0$ uniformly in $t$, the discrete-time
+consensus iteration
 
     x(t+1) = (I - mu * L_G(t)) x(t)
 
-with mu = 1/3 (stable since max-degree of a matching is 1, so
-lambda_max(L_G) <= 2). Initial state x(0) drawn from N(0, I) and
-centered. Track disagreement delta(t) = ||x(t) - mean(x)||_2.
+converges to consensus geometrically. The script runs this iteration
+on the canonical predictive trace and plots the disagreement
+$\\|x(t) - \\bar{x}\\mathbf{1}\\|_2$ on a log scale.
 
-For statistical stability, repeat with N_TRIALS = 20 different
-initial conditions per policy and report mean delta(t) and a 1-sigma
-band over trials.
+We only plot predictive. The corollary is about the certificate
+holding; comparing decay rates between policies confounds
+joint-connectivity (which the certificate guarantees) with mixing
+(which depends on graph dynamics, not on $\\lambda_2$ alone).
 
 Output
 ------
-- Per-policy delta(t) array saved to results/consensus/<policy>.npz
-- Figure: figures/paper/fig2_consensus.pdf (semilog-y, all policies)
+- Disagreement array saved to results/consensus/predictive_disagreement.npy
+- Figure: figures/paper/fig2_consensus.pdf
 """
 
 from __future__ import annotations
@@ -57,18 +54,8 @@ OUT_DIR = RESULTS_ROOT / "consensus"
 N_TRIALS = 20
 MU = 1.0 / 3.0  # consensus step size; safe for max degree <= 2
 
-# Which policies to include and their canonical trace filenames.
-POLICIES = {
-    "predictive": "predictive_seed42.npz",
-    "greedy":     "greedy_seed42.npz",
-    "random":     "random_seed42.npz",
-}
-
-PRETTY_NAMES = {
-    "predictive": "Predictive",
-    "greedy":     "Greedy",
-    "random":     "Random",
-}
+PREDICTIVE_TRACE = "predictive_seed42.npz"
+SHOW_THEORETICAL_BOUND = False  # set True to overlay the corollary's conservative rate
 
 
 def load_matchings(path: Path) -> tuple[np.ndarray, int]:
@@ -129,11 +116,17 @@ def run_consensus(actions: np.ndarray, n: int, n_epochs: int,
 
 
 def plot_consensus(
-    delta_by_policy: dict[str, np.ndarray],
+    delta: np.ndarray,
     T: int, n_epochs: int, dt_s: float, orbital_period_s: float,
+    alpha_0: float | None,
     out_path: Path,
 ) -> None:
-    """Plot disagreement delta(t) on a log-y axis."""
+    """Plot disagreement delta(t) for predictive on a log-y axis.
+
+    Single curve with a sigma ribbon. Warmup region shaded. Optional
+    theoretical-bound reference line if SHOW_THEORETICAL_BOUND is True
+    and alpha_0 is known.
+    """
     apply_theme(context="paper")
 
     fig, ax = plt.subplots(figsize=(FIG_WIDTH_SINGLE_COL, FIG_HEIGHT_DEFAULT))
@@ -142,37 +135,41 @@ def plot_consensus(
     warmup_end = T * dt_s / orbital_period_s
     ax.axvspan(0, warmup_end, color=COLORS.parchment, alpha=0.35, zorder=0)
 
-    colors = {
-        "predictive": POLICY_COLORS["predictive"],
-        "greedy":     POLICY_COLORS["greedy"],
-        "random":     POLICY_COLORS["random"],
-    }
-    styles = {"predictive": "-", "greedy": "--", "random": ":"}
+    color = POLICY_COLORS.get("predictive", COLORS.burgundy)
 
-    for policy, delta in delta_by_policy.items():
-        mean = delta.mean(axis=0)
-        # Numerical floor to keep log plot well-behaved.
-        mean = np.maximum(mean, 1e-10)
-        std = delta.std(axis=0)
+    mean = delta.mean(axis=0)
+    mean = np.maximum(mean, 1e-12)  # log-plot floor
+    std = delta.std(axis=0)
+    ax.semilogy(
+        x_periods, mean,
+        color=color, linestyle="-", linewidth=1.4, zorder=3,
+        label="Predictive",
+    )
+    upper = np.maximum(mean + std, 1e-12)
+    lower = np.maximum(mean - std, 1e-12)
+    ax.fill_between(
+        x_periods, lower, upper,
+        color=color, alpha=0.20, zorder=2, linewidth=0,
+    )
+
+    # Optional: theoretical decay bound from the corollary.
+    if SHOW_THEORETICAL_BOUND and alpha_0 is not None:
+        # Conservative per-window decay: (1 - mu * rho * alpha_0 / T)^(t/T).
+        # Plotted with rho ~ 1 (post-warmup, where the certificate saturates).
+        rho_alpha = alpha_0
+        per_window_rate = max(1.0 - MU * rho_alpha / T, 1e-9)
+        # Convert to per-epoch rate.
+        per_epoch_rate = per_window_rate ** (1.0 / T)
+        d0 = float(mean[0])
+        bound = d0 * per_epoch_rate ** np.arange(n_epochs + 1)
         ax.semilogy(
-            x_periods, mean,
-            color=colors.get(policy, COLORS.near_black),
-            linestyle=styles.get(policy, "-"),
-            linewidth=1.2, zorder=3,
-            label=PRETTY_NAMES.get(policy, policy),
-        )
-        # Optional ribbon (sigma in log space is awkward; using +sigma upper bound only).
-        upper = np.maximum(mean + std, 1e-10)
-        ax.fill_between(
-            x_periods, mean, upper,
-            color=colors.get(policy, COLORS.near_black),
-            alpha=0.15, zorder=2, linewidth=0,
+            x_periods, np.maximum(bound, 1e-12),
+            color=COLORS.warm_gray, linestyle=":", linewidth=0.9, zorder=2,
+            label="corollary bound",
         )
 
-    # Warmup label.
-    y_top = ax.get_ylim()[1]
     ax.text(
-        warmup_end / 2, y_top * 0.5,
+        warmup_end / 2, ax.get_ylim()[1] * 0.5,
         "warmup", color=COLORS.warm_gray, fontsize=7, ha="center", va="center",
     )
 
@@ -189,64 +186,49 @@ def main() -> int:
     configure(level="WARNING")
     OUT_DIR.mkdir(exist_ok=True)
 
-    if not CANONICAL_DIR.exists():
-        print(f"[ERROR] canonical traces directory not found: {CANONICAL_DIR}")
+    path = CANONICAL_DIR / PREDICTIVE_TRACE
+    if not path.exists():
+        print(f"[ERROR] canonical predictive trace not found: {path}")
         print("Run scripts.stage_canonical_traces first.")
         return 1
 
-    delta_by_policy: dict[str, np.ndarray] = {}
-    n = T = dt_s = orbital_period_s = None
-    n_epochs_first = None
+    actions, n_epochs = load_matchings(path)
+    n = actions.shape[1]
+    _, manifest = load_trace(path)
+    user = manifest.get("user", {})
+    policy_params = user.get("policy_params", {})
+    T = int(policy_params.get("T", user.get("T", 574)))
+    dt_s = float(user.get("dt_s", 10.0))
+    orbital_period_s = T * dt_s
 
-    for policy, fname in POLICIES.items():
-        path = CANONICAL_DIR / fname
-        if not path.exists():
-            print(f"[WARN] missing trace: {path}")
-            continue
+    # Pull alpha_0 from the diagnostics report if available.
+    report = user.get("report", {})
+    alpha_0 = float(report.get("alpha_0", 0.0)) or None
 
-        actions, n_epochs = load_matchings(path)
-        if n is None:
-            n = actions.shape[1]
-            # Pull metadata from the trace for axis labels.
-            _, manifest = load_trace(path)
-            user = manifest.get("user", {})
-            policy_params = user.get("policy_params", {})
-            T = int(policy_params.get("T", user.get("T", 574)))
-            dt_s = float(user.get("dt_s", 10.0))
-            orbital_period_s = T * dt_s
-            n_epochs_first = n_epochs
-        elif n_epochs != n_epochs_first:
-            print(f"[WARN] {policy}: n_epochs mismatch "
-                  f"({n_epochs} vs {n_epochs_first}); skipping")
-            continue
+    print(f"Predictive trace: n={n}, n_epochs={n_epochs}, T={T}")
+    print(f"alpha_0 = {alpha_0 if alpha_0 is not None else 'unknown'}")
+    print(f"Running {N_TRIALS} consensus trials...")
+    t0 = time.perf_counter()
+    delta = run_consensus(actions, n, n_epochs)
+    elapsed = time.perf_counter() - t0
+    print(f"  done in {elapsed:.1f}s. "
+          f"Initial delta {delta[:, 0].mean():.3f}, "
+          f"final delta {delta[:, -1].mean():.3e}")
 
-        print(f"Running consensus for {policy}: n={n}, n_epochs={n_epochs}, "
-              f"{N_TRIALS} trials...")
-        t0 = time.perf_counter()
-        delta = run_consensus(actions, n, n_epochs)
-        elapsed = time.perf_counter() - t0
-        print(f"  done in {elapsed:.1f}s. "
-              f"Initial delta {delta[:, 0].mean():.3f}, "
-              f"final delta {delta[:, -1].mean():.3e}")
+    np.save(OUT_DIR / "predictive_disagreement.npy", delta)
 
-        np.save(OUT_DIR / f"{policy}_disagreement.npy", delta)
-        delta_by_policy[policy] = delta
-
-    if not delta_by_policy:
-        print("[ERROR] no policies loaded")
-        return 1
-
+    # Summary statistics.
     print()
-    print("Summary (post-warmup disagreement reduction):")
-    print(f"  {'policy':<14} {'delta(T)':>10} {'delta(end)':>12} {'reduction':>12}")
-    for policy, delta in delta_by_policy.items():
-        d_at_T = delta[:, T].mean()
-        d_at_end = delta[:, -1].mean()
-        ratio = d_at_end / max(d_at_T, 1e-15)
-        print(f"  {policy:<14} {d_at_T:>10.4e} {d_at_end:>12.4e} {ratio:>12.4e}")
+    print("Disagreement decay (predictive):")
+    print(f"  at t = 0:           {delta[:, 0].mean():.4e}")
+    print(f"  at t = T (warmup):  {delta[:, T].mean():.4e}")
+    print(f"  at t = end:         {delta[:, -1].mean():.4e}")
+    print(f"  post-warmup ratio:  {delta[:, -1].mean() / max(delta[:, T].mean(), 1e-15):.4e}")
+    decay_orders = np.log10(delta[:, 0].mean() / max(delta[:, -1].mean(), 1e-15))
+    print(f"  total decay:        {decay_orders:.2f} orders of magnitude")
 
     out_path = figures_dir("paper") / "fig2_consensus.pdf"
-    plot_consensus(delta_by_policy, T, n_epochs_first, dt_s, orbital_period_s, out_path)
+    plot_consensus(delta, T, n_epochs, dt_s, orbital_period_s, alpha_0, out_path)
     print(f"\nSaved figure to {out_path}")
 
     return 0
