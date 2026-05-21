@@ -73,15 +73,27 @@ class EquilibriumMatching(PredictiveMatching):
     - ``br_rounds``: number of full Gauss-Seidel passes used.
     - ``br_converged``: 1 if a fixed point was reached, 0 if the
       max_rounds cap fired.
+    - ``br_potential_trace`` (only if ``record_potential_trace=True``):
+      one length-``br_rounds`` float array per epoch, recording the
+      potential ``W_t`` at the end of each Gauss-Seidel sweep. Stored
+      as a Python list-of-lists (jagged across epochs). Used by
+      sanity-check S4 to verify monotone improvement.
     """
 
     name: str = "equilibrium"
 
-    def __init__(self, *args, max_rounds: int = DEFAULT_MAX_ROUNDS, **kwargs):
+    def __init__(
+        self,
+        *args,
+        max_rounds: int = DEFAULT_MAX_ROUNDS,
+        record_potential_trace: bool = False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         if max_rounds <= 0:
             raise ValueError(f"max_rounds must be positive; got {max_rounds}.")
         self.max_rounds = max_rounds
+        self.record_potential_trace = record_potential_trace
 
     # -----------------------------------------------------------------------
     # Overridden public interface
@@ -113,6 +125,12 @@ class EquilibriumMatching(PredictiveMatching):
         # value cheaply.
         a = super().decide(t).copy()
 
+        # Optional: record the potential at the warm-start (round 0) so
+        # the trace covers the whole sequence including pre-iteration.
+        potential_trace: list[float] = []
+        if self.record_potential_trace:
+            potential_trace.append(self._potential(a))
+
         # Step 3: Gauss-Seidel BR sweeps.
         converged = False
         for round_idx in range(self.max_rounds):
@@ -122,6 +140,8 @@ class EquilibriumMatching(PredictiveMatching):
                 if br_i != int(a[i]):
                     a[i] = br_i
                     changed = True
+            if self.record_potential_trace:
+                potential_trace.append(self._potential(a))
             if not changed:
                 converged = True
                 break
@@ -129,6 +149,8 @@ class EquilibriumMatching(PredictiveMatching):
         rounds_used = round_idx + 1
         self._record("br_rounds", rounds_used)
         self._record("br_converged", int(converged))
+        if self.record_potential_trace:
+            self._record("br_potential_trace", potential_trace)
 
         if not converged:
             log.debug(
@@ -154,6 +176,31 @@ class EquilibriumMatching(PredictiveMatching):
         self._cached_baseline_omega = None
         self._cached_value_epoch = -1
         self._cached_value_matrix = None
+
+    # -----------------------------------------------------------------------
+    # Potential function (for sanity-check S4)
+    # -----------------------------------------------------------------------
+
+    def _potential(self, a: np.ndarray) -> float:
+        """W_t(a) = sum over realized edges of V_i(j; t).
+
+        The realized matching G(t; a) is the set of mutual choices: pair
+        (i, j) is in G iff a[i] == j AND a[j] == i. The potential sums
+        the raw Kirchhoff drop V[i, j] over each such edge (counted once
+        per pair, i < j). Reads from the per-epoch value-matrix cache.
+
+        Requires the cache to be populated for the current epoch
+        (decide() always populates it before calling _potential).
+        """
+        if self._cached_value_matrix is None:
+            return 0.0
+        V = self._cached_value_matrix
+        total = 0.0
+        for i in range(self.n):
+            j = int(a[i])
+            if j > i and 0 <= j < self.n and int(a[j]) == i:
+                total += float(V[i, j])
+        return total
 
     # -----------------------------------------------------------------------
     # Best-response inner loop
