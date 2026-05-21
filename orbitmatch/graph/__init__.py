@@ -20,19 +20,23 @@ from orbitmatch.graph.spectral import (
 )
 from orbitmatch.graph.windowed import (
     WindowedLaplacian,
+    WindowedUnion,
     compute_lambda2_trace,
+    compute_lambda2_union_trace,
     matchings_to_laplacian_sequence,
 )
 
 __all__ = [
     "EMPTY_MATCHING",
     "WindowedLaplacian",
+    "WindowedUnion",
     "actions_to_edges",
     "adjacency_to_laplacian",
     "cache_clear",
     "cache_info",
     "canonicalize_matching",
     "compute_lambda2_trace",
+    "compute_lambda2_union_trace",
     "edges_to_actions",
     "eigenvalues",
     "kirchhoff_index",

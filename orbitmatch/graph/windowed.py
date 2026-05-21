@@ -40,7 +40,11 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from orbitmatch.graph.laplacian import EMPTY_MATCHING, matching_to_laplacian
+from orbitmatch.graph.laplacian import (
+    EMPTY_MATCHING,
+    adjacency_to_laplacian,
+    matching_to_laplacian,
+)
 from orbitmatch.graph.spectral import lambda_2
 from orbitmatch.utils.logging_setup import get_logger
 from orbitmatch.utils.timing import timed
@@ -203,3 +207,153 @@ def matchings_to_laplacian_sequence(
     L(t) rather than the windowed sum. Not used in the hot path.
     """
     return [matching_to_laplacian(np.asarray(m, dtype=np.int64).reshape(-1, 2), n) for m in matchings]
+
+
+# ---------------------------------------------------------------------------
+# Windowed union (realized union graph G_union(t; T))
+# ---------------------------------------------------------------------------
+
+
+class WindowedUnion:
+    """Running union of recent matchings.
+
+    Maintains the realized union graph
+
+        G_union(t; T) = (N, union of edges of G(s) for s in [t-T+1, t])
+
+    as a dense boolean (n, n) adjacency matrix, plus a per-edge count
+    deque so we know when an edge falls out of the window. The
+    certificate (Theorem 6) is on lambda_2 of this graph's Laplacian.
+
+    Parameters
+    ----------
+    n
+        Number of satellites.
+    window_length
+        T, the certificate window length, in epochs.
+
+    Notes
+    -----
+    Implementation uses an integer count matrix tracking how many
+    epochs each edge has appeared in the window. When the count for an
+    edge drops to zero, the edge is removed from the adjacency. This
+    is O(k) per push where k is the number of edges in the pushed and
+    evicted matchings (at most n/2 each).
+    """
+
+    def __init__(self, n: int, window_length: int) -> None:
+        if n <= 0:
+            raise ValueError(f"n must be positive; got {n}.")
+        if window_length <= 0:
+            raise ValueError(f"window_length must be positive; got {window_length}.")
+
+        self.n = n
+        self.T = window_length
+        # Per-edge appearance count over the window.
+        self._counts = np.zeros((n, n), dtype=np.int32)
+        # Recent matchings; left = oldest.
+        self._matchings: deque[np.ndarray] = deque(maxlen=window_length)
+
+    # ---- Mutating operations -------------------------------------------------
+
+    def push(self, matching: np.ndarray) -> None:
+        """Add a matching to the window, evicting the oldest if at capacity."""
+        # Evict the oldest if at capacity.
+        if len(self._matchings) == self.T:
+            old = self._matchings[0]
+            if old.size > 0:
+                self._counts[old[:, 0], old[:, 1]] -= 1
+                self._counts[old[:, 1], old[:, 0]] -= 1
+
+        # Add the new one.
+        new_matching = np.asarray(matching, dtype=np.int64).reshape(-1, 2)
+        if new_matching.size > 0:
+            self._counts[new_matching[:, 0], new_matching[:, 1]] += 1
+            self._counts[new_matching[:, 1], new_matching[:, 0]] += 1
+        self._matchings.append(new_matching)
+
+    def reset(self) -> None:
+        """Empty the window."""
+        self._counts.fill(0)
+        self._matchings.clear()
+
+    # ---- Accessors -----------------------------------------------------------
+
+    @property
+    def adjacency(self) -> np.ndarray:
+        """Current union-graph adjacency as a boolean (n, n) matrix."""
+        return self._counts > 0
+
+    @property
+    def laplacian(self) -> np.ndarray:
+        """Laplacian L_union_G(t; T) of the current union graph."""
+        return adjacency_to_laplacian(self.adjacency.astype(np.float64))
+
+    @property
+    def n_edges(self) -> int:
+        """Number of distinct edges currently in the union graph."""
+        return int(self.adjacency.sum() // 2)
+
+    @property
+    def window_filled(self) -> bool:
+        """True once at least T matchings have been pushed."""
+        return len(self._matchings) == self.T
+
+    @property
+    def epochs_in_window(self) -> int:
+        """Number of matchings currently in the window (<= T)."""
+        return len(self._matchings)
+
+    def lambda_2(self) -> float:
+        """Algebraic connectivity of the current union graph."""
+        return lambda_2(self.laplacian)
+
+
+# ---------------------------------------------------------------------------
+# Batch utility for union-graph lambda_2
+# ---------------------------------------------------------------------------
+
+
+def compute_lambda2_union_trace(
+    matchings: Sequence[np.ndarray],
+    n: int,
+    window_length: int,
+) -> np.ndarray:
+    """Compute the realized-union lambda_2 trace over a matching sequence.
+
+    Mirror of :func:`compute_lambda2_trace` but on the union graph
+    rather than the windowed sum. The union form is the object the
+    certificate Theorem 6 guarantees.
+
+    Parameters
+    ----------
+    matchings
+        Iterable of ``(k_t, 2)`` int arrays, one per epoch.
+    n
+        Number of satellites.
+    window_length
+        ``T``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float64 array of length ``len(matchings)``.
+    """
+    wu = WindowedUnion(n, window_length)
+    trace = np.zeros(len(matchings), dtype=np.float64)
+
+    with timed("compute_lambda2_union_trace"):
+        for t, m in enumerate(matchings):
+            wu.push(m if m is not None else EMPTY_MATCHING)
+            trace[t] = wu.lambda_2()
+
+    if len(trace) >= window_length:
+        log.info(
+            "Computed union-graph lambda_2 trace over %d epochs (T=%d): min=%.4f, max=%.4f, mean=%.4f",
+            len(matchings),
+            window_length,
+            float(trace[window_length - 1 :].min()),
+            float(trace[window_length - 1 :].max()),
+            float(trace[window_length - 1 :].mean()),
+        )
+    return trace
