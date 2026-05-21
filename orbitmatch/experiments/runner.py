@@ -52,6 +52,7 @@ from orbitmatch.feasibility.compute import load_or_compute_feasibility
 from orbitmatch.feasibility.predicates import FeasibilityParams
 from orbitmatch.graph.laplacian import actions_to_edges
 from orbitmatch.graph.windowed import WindowedLaplacian, WindowedUnion
+from orbitmatch.policy.adaptive import AdaptivePredictive
 from orbitmatch.policy.base import Policy, PolicyParams
 from orbitmatch.policy.baselines import GreedyMatching, RandomMatching
 from orbitmatch.policy.equilibrium import EquilibriumMatching
@@ -75,6 +76,7 @@ _POLICY_REGISTRY: dict[str, type[Policy]] = {
     "random": RandomMatching,
     "equilibrium": EquilibriumMatching,
     "k_step": KStepPredictive,
+    "adaptive": AdaptivePredictive,
 }
 
 
