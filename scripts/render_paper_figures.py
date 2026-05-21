@@ -241,7 +241,7 @@ def _plot_fig1_curves(
     ax.set_ylabel(r"$\lambda_2(L^\cup_{\mathcal{G}}(t; T))$")
     ax.set_xlim(x[0], x[-1])
     ax.set_ylim(bottom=0)
-    ax.legend(loc="lower right", fontsize=7, ncol=1)
+    ax.legend(loc="upper left", fontsize=7, ncol=1)
     return fig, ax
 
 
@@ -359,7 +359,11 @@ def _plot_headline_panel(ax: plt.Axes, headline_data: dict[str, dict]) -> None:
     ax.set_xticklabels(metric_names)
     ax.set_ylabel("Value (count or %)")
     ax.set_title("Update order: synchronous vs Gauss-Seidel", fontsize=9)
-    ax.legend(fontsize=7, loc="upper right", ncol=2)
+    ax.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.18),
+        fontsize=7, ncol=4, frameon=False,
+        handletextpad=0.4, columnspacing=1.0,
+    )
     ax.set_ylim(bottom=0)
 
     if "k1_gs_identity" in headline_data:
@@ -411,10 +415,10 @@ def _plot_edge_timeseries_panel(ax: plt.Axes, traces: dict[str, SimulationResult
         x_label = "Epoch $t$"
         warmup_end = float(first.T)
 
-    ax.axvspan(0, warmup_end, color=COLORS.parchment, alpha=0.35, zorder=0,
-               label="warmup")
+    ax.axvspan(0, warmup_end, color=COLORS.parchment, alpha=0.35, zorder=0)
 
     window = 20  # rolling mean window in epochs
+    final_positions: list[tuple[str, float, str]] = []  # (label, y_final, color)
 
     for label, result in traces.items():
         edges = result.n_edges_per_epoch.astype(np.float64)
@@ -427,18 +431,45 @@ def _plot_edge_timeseries_panel(ax: plt.Axes, traces: dict[str, SimulationResult
         if len(edges) >= window:
             kernel = np.ones(window) / window
             smoothed = np.convolve(edges, kernel, mode="same")
-            ax.plot(x_base, smoothed, color=color, linewidth=1.2, zorder=3,
-                    label=pretty.get(label, label))
+            ax.plot(x_base, smoothed, color=color, linewidth=1.2, zorder=3)
+            # Average over the last window epochs for a stable label position.
+            y_final = float(np.mean(smoothed[-window:]))
         else:
-            ax.plot(x_base, edges, color=color, linewidth=1.2, zorder=3,
-                    label=pretty.get(label, label))
+            ax.plot(x_base, edges, color=color, linewidth=1.2, zorder=3)
+            y_final = float(edges[-1])
+
+        final_positions.append((pretty.get(label, label), y_final, color))
 
     ax.set_xlabel(x_label)
     ax.set_ylabel("Edges per epoch")
     ax.set_title("Realized matching density over time", fontsize=9)
-    ax.set_xlim(x_base[0], x_base[-1])
     ax.set_ylim(bottom=0)
-    ax.legend(fontsize=7, loc="lower right")
+
+    # Extend the x-axis slightly past the last data point so inline labels
+    # have room to the right of the curves without being clipped.
+    x_end = float(x_base[-1])
+    x_pad = (x_end - float(x_base[0])) * 0.20
+    ax.set_xlim(x_base[0], x_end + x_pad)
+
+    # Inline labels at the right edge of each curve. Sort by y so we can
+    # nudge any overlapping labels apart.
+    final_positions.sort(key=lambda t: t[1])
+    min_gap = (ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.06  # ~6% of axis range
+    last_y = -np.inf
+    for label, y, color in final_positions:
+        y_text = max(y, last_y + min_gap)
+        ax.annotate(
+            label,
+            xy=(x_end, y), xytext=(x_end + x_pad * 0.10, y_text),
+            color=color, fontsize=7, va="center", ha="left",
+        )
+        last_y = y_text
+
+    # Warmup label placed where the data is, not in the bottom-right.
+    ax.text(
+        warmup_end / 2, ax.get_ylim()[1] * 0.04,
+        "warmup", color=COLORS.warm_gray, fontsize=7, ha="center", va="bottom",
+    )
 
 
 
