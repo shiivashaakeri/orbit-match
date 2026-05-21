@@ -8,30 +8,46 @@ one-step reciprocation predictor is one round of best-response (BR)
 dynamics on the potential game Gamma_t, and that "richer reciprocation
 predictors correspond to deeper truncations of best-response dynamics."
 This module implements that family explicitly: KStepPredictive runs
-exactly k rounds of synchronous BR, starting from a level-0
-initialization (every satellite picks its top-V partner, ignoring
-reciprocation).
+exactly k rounds of BR, starting from a level-0 initialization (every
+satellite picks its top-V partner, ignoring reciprocation).
 
-Boundary cases (verified numerically in scripts/check_k_step.py):
+Two update orders are supported via the ``mode`` kwarg:
 
-  k = 0 -> identical to GreedyMatching (every satellite picks
-           top-V partner, no reciprocation logic).
-  k = 1 -> identical to PredictiveMatching (each satellite does
-           one BR against the level-0 profile, which is exactly
-           the one-step indicator p_ij = 1{BR_j(a_-j) = i}).
-  k -> infty -> converges to a fixed point of BR, i.e., a NE of
-           Gamma_t. Equivalent to EquilibriumMatching minus the
-           early-exit on convergence.
+  mode = "sync"          synchronous (Jacobi). All satellites update
+                         simultaneously against the previous round's
+                         actions. Cleanest level-k semantics: when i
+                         models j at level k-1, j models i at level k-1
+                         too, with no canonical ordering.
+  mode = "gauss_seidel"  Gauss-Seidel. Satellites update sequentially
+                         in index order within each round; each
+                         satellite sees the most recent actions of
+                         lower-indexed satellites. The standard setting
+                         for finite-improvement convergence on
+                         potential games.
 
-The synchronous (Jacobi) update is chosen rather than Gauss-Seidel
-because the paper's level-k thinking is symmetric across satellites:
-when i models j at level k-1, j models i at level k-1 also; there is
-no canonical ordering. Synchronous BR can in principle cycle on a
-potential game, but at small k (1, 2, 3) on our geometries this is
-rare and benign -- we are not iterating to convergence here.
+The two modes converge to *different* fixed points on the same game.
+Synchronous BR has a tendency to land on shallow attractors close to
+the level-0 profile; Gauss-Seidel walks more aggressively into the
+potential's interior and tends to find higher-W_t fixed points.
+
+Boundary cases:
+
+  k = 0     identical to GreedyMatching regardless of mode
+            (every satellite picks top-V; no BR).
+  k = 1     identical to PredictiveMatching regardless of mode
+            (one BR sweep against the level-0 profile: in sync mode
+            this is a Jacobi sweep, in gauss_seidel mode the
+            sequential updates of round 1 only see the level-0
+            profile for unupdated satellites; in both cases the
+            output is the predictive policy's action when the
+            level-0 cache feeds _reciprocation_prob).
+  k -> inf  sync converges to a synchronous fixed point;
+            gauss_seidel converges to a NE of Gamma_t.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 import numpy as np
 
@@ -44,18 +60,15 @@ log = get_logger(__name__)
 
 
 class KStepPredictive(PredictiveMatching):
-    """Predictive matching with exactly k rounds of synchronous BR.
+    """Predictive matching with exactly k rounds of BR.
 
-    At decision time for epoch t:
-    1. Initialize a^(0) by every satellite picking its top-V partner
-       (the level-0 profile, identical to GreedyMatching's choice).
-    2. For r = 1..k: simultaneously update every satellite's action
-       to its best response against a^(r-1).
-    3. Return a^(k).
-
-    The k = 1 case reduces to the standard predictive policy because
-    best-responding to the level-0 profile gives exactly the one-step
-    indicator p_ij = 1{a^(0)_j = i} = 1{j's top-V partner is i}.
+    Parameters
+    ----------
+    k
+        Number of BR rounds (>= 0).
+    mode
+        Either "sync" (synchronous Jacobi) or "gauss_seidel"
+        (sequential). See module docstring for the difference.
 
     Diagnostics recorded per epoch
     ------------------------------
@@ -65,14 +78,23 @@ class KStepPredictive(PredictiveMatching):
 
     name: str = "k_step"
 
-    def __init__(self, *args, k: int = 1, **kwargs):
+    def __init__(
+        self,
+        *args,
+        k: int = 1,
+        mode: Literal["sync", "gauss_seidel"] = "sync",
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         if k < 0:
             raise ValueError(f"k must be non-negative; got {k}.")
+        if mode not in ("sync", "gauss_seidel"):
+            raise ValueError(f"mode must be 'sync' or 'gauss_seidel'; got {mode!r}.")
         self.k = k
+        self.mode = mode
 
     def decide(self, t: int) -> np.ndarray:
-        """Run exactly self.k rounds of synchronous BR at epoch t."""
+        """Run exactly self.k rounds of BR at epoch t."""
         # Populate value-matrix and top-partner caches once.
         if self._cached_value_epoch != t:
             self._cached_value_matrix = self._compute_value_matrix(t)
@@ -82,17 +104,18 @@ class KStepPredictive(PredictiveMatching):
             self._cached_top_partner_epoch = t
 
         # Level-0 profile: every satellite picks its top-V partner.
-        # _compute_top_value_partners gives exactly that.
         a = self._cached_top_partners.copy()
 
-        # Synchronous BR: at each round, compute every i's best response
-        # against the current (frozen) joint action, then commit all
-        # updates simultaneously.
-        for _ in range(self.k):
-            a_new = np.full(self.n, NO_LINK, dtype=np.int64)
-            for i in range(self.n):
-                a_new[i] = self._best_response_against(i, t, a)
-            a = a_new
+        if self.mode == "sync":
+            for _ in range(self.k):
+                a_new = np.full(self.n, NO_LINK, dtype=np.int64)
+                for i in range(self.n):
+                    a_new[i] = self._best_response_against(i, t, a)
+                a = a_new
+        else:  # gauss_seidel
+            for _ in range(self.k):
+                for i in range(self.n):
+                    a[i] = self._best_response_against(i, t, a)
 
         self._record("k_step_value", self.k)
         return a

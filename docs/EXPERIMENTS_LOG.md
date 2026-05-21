@@ -11,6 +11,201 @@ Format:
 
 ---
 
+## 2026-05-20 — k-ablation, first run, synchronous BR + initial adaptive
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** `scripts/run_k_ablation.py`
+
+### Setup
+
+Medium Walker (60/6/2), 2 orbital periods (1148 epochs), single seed 42,
+T = T_orb = 574 epochs. Six policies: k_step at k in {1, 2, 3, 8} all
+synchronous (Jacobi), equilibrium (Gauss-Seidel BR to convergence
+warm-started from level-1), adaptive with delta_threshold=0.1, k_max=3.
+
+### Results
+
+```
+policy        req/ep  edges/ep  waste%   rho_max  rho_mean  rho_cover
+k1            38.11    6.79     64.4%    1.0000   0.9855    0.9529
+k2            38.11    6.79     64.4%    1.0000   0.9855    0.9529
+k3            38.11    6.79     64.4%    1.0000   0.9855    0.9529
+k8            38.11    6.79     64.4%    1.0000   0.9855    0.9529
+equilibrium   32.92   16.46      0.0%    1.0000   0.9993    0.9843
+adaptive      36.51   10.67     41.6%    1.0000   0.9980    0.9843
+
+Adaptive: mean ambiguous frac = 13.83% (max 40.00%, min 0.00%)
+         cost vs k=1 = 1.28x (with k_max=3)
+```
+
+Wall-clock: 470 s for six policies.
+
+### Outcomes
+
+Three findings:
+
+1. **Synchronous BR plateaus at k=1.** k=2, k=3, k=8 produce *identical*
+   actions, matchings, and metrics to k=1. Synchronous BR hits a fixed
+   point in one round on this geometry; subsequent rounds don't move
+   anyone.
+
+2. **Equilibrium (Gauss-Seidel) finds genuinely better fixed points.**
+   2.4x more edges per epoch (16.46 vs 6.79), zero waste, slightly
+   higher rho_mean. The "k -> infty" limit referenced in paper Sec IV.D
+   Remark must be Gauss-Seidel, not synchronous.
+
+3. **Adaptive sits halfway between predictive and equilibrium.** With
+   only 13.83% of satellites escalating per epoch (1.28x compute vs
+   k=1), adaptive realizes 10.67 edges/ep (57% more than k=1) and
+   matches equilibrium's rho_cover exactly. The level-1 warm-start
+   plus selective Gauss-Seidel-style updates of the ambiguous subset
+   captures most of equilibrium's benefit cheaply.
+
+### Decisions
+
+- Re-run with a Gauss-Seidel k_step variant to get the proper
+  k=1->infty smooth interpolation (synchronous mode doesn't deliver it).
+- Reframe Plot 3 (currently scaling) as the k-ablation. Scaling moves
+  to supplementary or gets cut for ACC.
+
+### Artifacts
+
+- `results/k_ablation/trace_medium_k{1,2,3,8}_seed42.npz`
+- `results/k_ablation/trace_medium_equilibrium_seed42.npz`
+- `results/k_ablation/trace_medium_adaptive_seed42.npz`
+
+## 2026-05-20 — Request efficiency: greedy/predictive equivalence on lambda_2, divergence on waste
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** ad-hoc diagnostic against `results/lambda2_traces/` traces
+
+### Question
+
+Headline run showed predictive and greedy produced identical realized
+matchings (both rho_mean = 0.9855 on medium). Re-checked our optimization
+to make sure we hadn't degraded predictive. Found the optimization is
+correct; the equivalence is a structural property of the model.
+
+### Diagnostic
+
+Counted per-epoch requests (number of satellites with action != -1) and
+realized edges, for each policy on medium seed 42.
+
+```
+policy        req/ep  edges/ep  waste/ep  waste%
+predictive     38.11    6.79     24.53    64.4%
+greedy         60.00    6.79     46.42    77.4%
+random         60.00    4.20     51.61    86.0%
+equilibrium    32.92   16.46      0.00     0.0%
+```
+
+### Outcomes
+
+- **Predictive vs greedy on this geometry**: identical realized edges
+  per epoch, identical rho_realized, identical union. Predictive wins
+  by making 37% fewer requests (38 vs 60). The deferral mechanism
+  eliminates the obviously-doomed requests but the mutual-choice rule
+  was already eating those at the realization level.
+
+- **Predictive's reciprocation prediction is wrong 64% of the time**
+  (24.53 wasted requests / 38.11 total). The one-step indicator
+  predicts mutual reciprocation, but two satellites both predicting
+  each other can disagree (because each predicts the other as a
+  value-maximizer, ignoring the other's own reciprocation logic). This
+  is exactly Prop 8's statement: predictive is one round of BR, not a
+  fixed point.
+
+- **Equilibrium achieves zero waste**: at a NE every satellite's
+  request is mutually consistent. Confirmed empirically.
+
+- **Random's "waste" is highest** at 86%, predictably.
+
+### Implication for the paper
+
+The deferral mechanism's value is not in lambda_2 (where greedy ties
+predictive). It is in operational cost: requests per epoch, energy
+spent slewing the laser to partners who will not point back, command
+bandwidth, mechanical wear. This is the right framing for Sec V.
+
+### Artifacts
+
+No new files; data is in `results/lambda2_traces/`.
+
+## 2026-05-20 — Headline run: lambda2_traces, four policies on medium
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** `scripts/run_lambda2_traces.py`
+
+### Setup
+
+Medium Walker (60/6/2), **2 orbital periods** (1148 epochs;
+duration_periods cut from 3 to 2 to fit wall-clock budget), seeds
+{42, 43, 44}, T = T_orb = 574 epochs, H = 10, c = 0.2, eps = 0.01.
+
+Policies: predictive, greedy, random, equilibrium. Total 12 jobs.
+
+### Results
+
+```
+policy        seeds  rho_max  rho_mean  rho_cover
+predictive       3   1.0000   0.9855    0.9529
+greedy           3   1.0000   0.9855    0.9529
+random           3   0.7410   0.7165    0.9131
+equilibrium      3   1.0000   0.9993    0.9843
+```
+
+Wall-clock: 636 s after the predictive-policy caching optimization
+(see notes below). First (unoptimized) run was killed after >15 min on
+predictive seed 1 alone.
+
+### Outcomes
+
+- **Predictive saturates the certificate**: rho_max = 1.0, rho_mean ~
+  0.99. The certificate window is essentially full of feasibility-union
+  edges by the time it fills.
+
+- **Equilibrium edges out predictive slightly**: rho_mean 0.9993 vs
+  0.9855. Both saturate at peak. Equilibrium's advantage is in the
+  rolling-window steady state: it realizes denser matchings per epoch,
+  so the rolling union decays less between feasibility refreshes.
+
+- **Greedy ties predictive on every connectivity metric.** Same
+  realized matchings. The deferral mechanism saves requests, not
+  edges.
+
+- **Random is clearly inferior** (rho_max 0.74); the no-strategy
+  baseline does what it should.
+
+### Note: predictive caching bug found and fixed
+
+The initial run was unbearably slow because `_reciprocation_prob(i, j)`
+was re-scoring satellite j's entire candidate set every time it was
+called. Per epoch, that meant ~420 redundant re-computations.
+
+Fixed by adding a per-epoch top-V-partner cache (`_compute_top_value_partners`)
+that runs once per epoch and is read by `_reciprocation_prob` as an
+O(1) lookup. Wall-clock dropped from "tens of minutes per policy seed"
+to "~3 min per policy seed" on medium.
+
+### Note: stale-trace bug found and fixed
+
+After cutting duration_periods 3 -> 2, the second run loaded a stray
+1722-epoch trace from before the kill, alongside 1148-epoch traces from
+the new run. `plot_lambda2_traces` raised `ValueError: Inconsistent
+n_epochs across seeds: [1722, 1148, 1148]`.
+
+Fixed by adding `cached_trace_matches()` to `run_lambda2_traces.py`:
+before treating a cached trace as valid, the manifest is checked for
+n_epochs / T / H equal to the current config. Mismatch -> regenerate.
+
+### Artifacts
+
+- `results/lambda2_traces/trace_medium_{predictive,greedy,random,equilibrium}_T574_H10_seed{42,43,44}.npz`
+- `figures/paper/fig1_lambda2_traces.pdf` (rendered separately)
+
 ## 2026-05-20 — Feasibility sanity check (medium + small)
 
 - **Branch/commit:** main / current
