@@ -255,9 +255,9 @@ def render_fig3(out_dir: Path) -> bool:
 
     Two-panel layout:
       Left: headline comparison (k1_sync, k1_gs identity, adaptive, equilibrium)
-            showing edges/ep, requests/ep, waste% as grouped bars.
-      Right: ordering remark (k1_gs identity vs reversed vs random) showing
-             edges/ep and rho_cover as paired bars.
+            showing requests/ep, edges/ep, waste% as grouped bars.
+      Right: edges-per-epoch time series for the same four policies over
+             the full simulation, with a smoothed mean overlay.
     """
     data_dir = CANONICAL_ROOT / "fig3"
     if not data_dir.exists():
@@ -265,9 +265,9 @@ def render_fig3(out_dir: Path) -> bool:
         return False
 
     headline_labels = ["k1_sync", "k1_gs_identity", "adaptive", "equilibrium"]
-    ordering_labels = ["k1_gs_identity", "k1_gs_reversed", "k1_gs_random"]
 
-    headline_data = {}
+    headline_data = {}    # label -> summary dict
+    headline_traces = {}  # label -> SimulationResult (for time series)
     for label in headline_labels:
         path = data_dir / f"{label}_seed42.npz"
         if not path.exists():
@@ -275,32 +275,23 @@ def render_fig3(out_dir: Path) -> bool:
             continue
         result, report = load_simulation_result(path)
         headline_data[label] = _summarize(result, report)
-
-    ordering_data = {}
-    for label in ordering_labels:
-        path = data_dir / f"{label}_seed42.npz"
-        if not path.exists():
-            log.warning("Fig 3: missing ordering trace %s", path.name)
-            continue
-        result, report = load_simulation_result(path)
-        ordering_data[label] = _summarize(result, report)
+        headline_traces[label] = result
 
     if not headline_data:
         log.warning("Fig 3: no headline data; skipping.")
         return False
 
-    print(f"Fig 3: loaded {len(headline_data)} headline traces, "
-          f"{len(ordering_data)} ordering traces")
+    print(f"Fig 3: loaded {len(headline_data)} headline traces")
 
     fig, (ax_left, ax_right) = plt.subplots(
-        1, 2, figsize=(FIG_WIDTH_DOUBLE_COL, FIG_HEIGHT_DEFAULT * 1.3),
-        gridspec_kw={"width_ratios": [1.4, 1.0]},
+        1, 2, figsize=(FIG_WIDTH_DOUBLE_COL, FIG_HEIGHT_DEFAULT * 1.4),
+        gridspec_kw={"width_ratios": [1.1, 1.3]},
     )
 
-    # ---- Left panel: headline ----
+    # ---- Left panel: headline summary bars ----
     _plot_headline_panel(ax_left, headline_data)
-    # ---- Right panel: orderings ----
-    _plot_ordering_panel(ax_right, ordering_data)
+    # ---- Right panel: edges/ep time series ----
+    _plot_edge_timeseries_panel(ax_right, headline_traces)
 
     fig.tight_layout()
     out_path = out_dir / "fig3_update_order.pdf"
@@ -326,12 +317,10 @@ def _summarize(result: SimulationResult, report: DiagnosticsReport) -> dict[str,
 
 
 def _plot_headline_panel(ax: plt.Axes, headline_data: dict[str, dict]) -> None:
-    """Grouped bars: edges/ep, requests/ep, waste% for four policies.
+    """Grouped bars: requests/ep, edges/ep, waste% for four policies.
 
-    Three metrics are plotted as side-by-side groups along the x-axis. Each
-    group has one bar per policy. Edges and requests are absolute counts;
-    waste% is in percent — we use a twin axis so the scale is readable for
-    both.
+    Three metrics are plotted as side-by-side groups along the x-axis.
+    Each group has one bar per policy.
     """
     labels = list(headline_data.keys())
     pretty = {
@@ -372,7 +361,7 @@ def _plot_headline_panel(ax: plt.Axes, headline_data: dict[str, dict]) -> None:
     ax.set_title("Update order: synchronous vs Gauss-Seidel", fontsize=9)
     ax.legend(fontsize=7, loc="upper right", ncol=2)
     ax.set_ylim(bottom=0)
-    # Light annotation for k1_gs_identity edges/ep
+
     if "k1_gs_identity" in headline_data:
         edges = headline_data["k1_gs_identity"]["edges_per_epoch"]
         ax.annotate(
@@ -383,38 +372,73 @@ def _plot_headline_panel(ax: plt.Axes, headline_data: dict[str, dict]) -> None:
         )
 
 
-def _plot_ordering_panel(ax: plt.Axes, ordering_data: dict[str, dict]) -> None:
-    """Bars showing the three k1_gs orderings on edges/ep and rho_cover."""
-    if not ordering_data:
-        ax.text(0.5, 0.5, "No ordering data", ha="center", va="center",
+def _plot_edge_timeseries_panel(ax: plt.Axes, traces: dict[str, SimulationResult]) -> None:
+    """Edges per epoch over time, smoothed with a rolling mean.
+
+    Plots the raw trace as a thin transparent line and the smoothed mean
+    (rolling window of 20 epochs) as the foreground curve. This makes the
+    steady-state separation between the four policies visible despite the
+    integer-valued per-epoch noise.
+    """
+    if not traces:
+        ax.text(0.5, 0.5, "No time-series data", ha="center", va="center",
                 transform=ax.transAxes, color=COLORS.warm_gray)
-        ax.set_title("Ordering remark", fontsize=9)
         return
 
     pretty = {
-        "k1_gs_identity": "identity",
-        "k1_gs_reversed": "reversed",
-        "k1_gs_random":   "random",
+        "k1_sync":         "Predictive (sync)",
+        "k1_gs_identity":  "Predictive (GS)",
+        "adaptive":        "Adaptive",
+        "equilibrium":     "Equilibrium",
     }
-    labels = list(ordering_data.keys())
-    edges = [ordering_data[k]["edges_per_epoch"] for k in labels]
-    covers = [ordering_data[k]["rho_cover"] * 20 for k in labels]  # scale to share axis
+    colors_table = {
+        "k1_sync":         POLICY_COLORS["predictive"],
+        "k1_gs_identity":  COLORS.copper,
+        "adaptive":        COLORS.warmbrown,
+        "equilibrium":     COLORS.olive,
+    }
 
-    x = np.arange(len(labels))
-    bar_width = 0.36
-    ax.bar(x - bar_width / 2, edges, width=bar_width,
-           color=COLORS.copper, edgecolor=COLORS.near_black, linewidth=0.4,
-           label="Edges / epoch")
-    ax.bar(x + bar_width / 2, covers, width=bar_width,
-           color=COLORS.forest, edgecolor=COLORS.near_black, linewidth=0.4,
-           label=r"$20 \cdot \rho_{\mathrm{cover}}$")
+    # Use orbital periods on x-axis if any trace has T*dt > 0.
+    first = next(iter(traces.values()))
+    orbital_period_s = first.T * first.dt_s
+    use_periods = orbital_period_s > 0
+    if use_periods:
+        x_base = np.arange(first.n_epochs) * first.dt_s / orbital_period_s
+        x_label = "Time (orbital periods)"
+        warmup_end = first.T * first.dt_s / orbital_period_s
+    else:
+        x_base = np.arange(first.n_epochs)
+        x_label = "Epoch $t$"
+        warmup_end = float(first.T)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels([pretty.get(k, k) for k in labels])
-    ax.set_ylabel("Value")
-    ax.set_title("k1_gs across orderings (all are NEs)", fontsize=9)
-    ax.legend(fontsize=7, loc="lower right")
+    ax.axvspan(0, warmup_end, color=COLORS.parchment, alpha=0.35, zorder=0,
+               label="warmup")
+
+    window = 20  # rolling mean window in epochs
+
+    for label, result in traces.items():
+        edges = result.n_edges_per_epoch.astype(np.float64)
+        color = colors_table.get(label, COLORS.near_black)
+
+        # Raw trace: thin and transparent.
+        ax.plot(x_base, edges, color=color, linewidth=0.4, alpha=0.25, zorder=2)
+
+        # Smoothed trace: rolling mean.
+        if len(edges) >= window:
+            kernel = np.ones(window) / window
+            smoothed = np.convolve(edges, kernel, mode="same")
+            ax.plot(x_base, smoothed, color=color, linewidth=1.2, zorder=3,
+                    label=pretty.get(label, label))
+        else:
+            ax.plot(x_base, edges, color=color, linewidth=1.2, zorder=3,
+                    label=pretty.get(label, label))
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Edges per epoch")
+    ax.set_title("Realized matching density over time", fontsize=9)
+    ax.set_xlim(x_base[0], x_base[-1])
     ax.set_ylim(bottom=0)
+    ax.legend(fontsize=7, loc="lower right")
 
 
 
