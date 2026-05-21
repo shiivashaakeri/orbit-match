@@ -11,30 +11,6 @@ Implements the policy
 where V_tilde and C_tilde are the normalized value and switching cost
 from Sec III.B and III.D of the paper. The four components:
 
-- :meth:`PredictiveMatching._value` evaluates the raw V_i(j; t) in
-  [0, 2H] as the marginal contribution of edge (i, j) to lambda_2(Phi)
-  scaled by the lookahead horizon.
-
-- :meth:`PredictiveMatching._switching_cost` evaluates the raw angular
-  switching cost in [0, pi].
-
-- :meth:`PredictiveMatching._reciprocation_prob` evaluates p_ij in
-  {0, 1} using the one-step best-response indicator. The simulated
-  best response uses the same normalized form as the real decision.
-
-- :meth:`PredictiveMatching.decide_for` combines them via the
-  normalized decision rule.
-
-The predictive matching policy of Section III.
-
-Implements the policy
-
-    a_i(t) = argmax_{j in F_i(t) cup {varnothing}}
-             p_ij(t) * [V_tilde_i(j; t) - c * C_tilde_switch_ij(t)],
-
-where V_tilde and C_tilde are the normalized value and switching cost
-from Sec III.B and III.D of the paper. The four components:
-
 - :meth:`PredictiveMatching._value` evaluates the raw V_i(j; t) as the
   marginal decrease in effective resistance (Kirchhoff index) of the
   policy's internal evaluation graph Phi(t) + epsilon * L_union_F.
@@ -53,11 +29,11 @@ Geometric prior
 The value function is the marginal decrease in effective resistance
 of Phi(t) + epsilon * L_union_F, where L_union_F is the Laplacian of
 the feasibility union over the simulation horizon and epsilon > 0 is
-the policy's geometric-prior weight. This regularization is *not* a
-cold-start hack: it encodes the common-knowledge orbital geometry
-(known to all satellites by assumption) as a soft prior on the
-evaluation graph. The certificate (Theorem 6) is on the realized
-union graph G^cup(t; T), which does not include any epsilon term.
+the policy's geometric-prior weight. This regularization encodes the
+common-knowledge orbital geometry (known to all satellites by
+assumption) as a soft prior on the evaluation graph. The certificate
+(Theorem 6) is on the realized union graph G^cup(t; T), which does
+not include any epsilon term.
 
 Per-satellite normalization
 ---------------------------
@@ -72,9 +48,13 @@ Per-satellite normalization preserves argmax within each satellite's
 candidate set, so the policy's choice (the BR direction) is
 unchanged.
 
-The certificate (Sec IV.E) is on the realized union graph
-G^cup(t; T), not on Phi, so this cold-start device does not enter the
-guarantee.
+Per-epoch caching
+-----------------
+To amortize the cost of computing Kirchhoff drops across many
+candidate pairs, the value matrix V[i, j] = V_i(j; t) is computed
+once per epoch (in decide(t)) and read from cache during all
+per-satellite _value and _reciprocation_prob lookups. The cache is
+invalidated at the end of each step().
 """
 
 from __future__ import annotations
@@ -100,14 +80,21 @@ class PredictiveMatching(Policy):
 
         # Pre-compute the feasibility-union Laplacian once. Used as the
         # geometric prior in the value function (per Sec III.B of the
-        # paper). Not a cold-start hack; it's the policy's encoding of
-        # common-knowledge orbital geometry.
+        # paper). Encodes common-knowledge orbital geometry.
         T_max = self.feasibility.shape[0]
         union_adj = feasibility_union(self.feasibility, window_start=0, window_length=T_max)
         self._union_laplacian = adjacency_to_laplacian(union_adj.astype(np.float64))
 
         # Tolerance for floating-point ties in scores.
         self._tie_tol = 1e-12
+
+        # Per-epoch caches for the Kirchhoff baseline and the value
+        # matrix. Both invalidated at the end of step().
+        self._cached_baseline_epoch: int = -1
+        self._cached_baseline_matrix: np.ndarray | None = None
+        self._cached_baseline_omega: float | None = None
+        self._cached_value_epoch: int = -1
+        self._cached_value_matrix: np.ndarray | None = None
 
         log.info(
             "PredictiveMatching: H=%d, T=%d, c=%.3f, epsilon=%.4f, Kirchhoff baseline = %.2f",
@@ -121,6 +108,22 @@ class PredictiveMatching(Policy):
     # -----------------------------------------------------------------------
     # Public decision interface
     # -----------------------------------------------------------------------
+
+    def decide(self, t: int) -> np.ndarray:
+        """Joint action at epoch t.
+
+        Overridden to populate the per-epoch value-matrix cache once,
+        so all per-satellite _value and _reciprocation_prob lookups
+        share the work.
+        """
+        if self._cached_value_epoch != t:
+            self._cached_value_matrix = self._compute_value_matrix(t)
+            self._cached_value_epoch = t
+
+        actions = np.full(self.n, NO_LINK, dtype=np.int64)
+        for i in range(self.n):
+            actions[i] = self.decide_for(i, t)
+        return actions
 
     def decide_for(self, i: int, t: int) -> int:
         """Compute satellite i's action at epoch t.
@@ -152,37 +155,100 @@ class PredictiveMatching(Policy):
         scores = np.zeros(n_candidates + 1, dtype=np.float64)
         for k, j in enumerate(candidates):
             v_tilde = v_raw[k] / v_max
-            c_raw = self._switching_cost(i, j, t)
+            c_raw = self._switching_cost(i, int(j), t)
             c_tilde = c_raw / np.pi
-            p = self._reciprocation_prob(i, j, t)
+            p = self._reciprocation_prob(i, int(j), t)
             scores[k] = p * (v_tilde - c * c_tilde)
         # scores[-1] = 0 (varnothing) already.
 
         return self._argmax_with_varnothing_preference(scores, candidates)
 
+    def step(self, t: int, actions: np.ndarray) -> None:
+        """Update pointing state and record deferral diagnostics.
+
+        Diagnostic runs BEFORE cache invalidation so it reuses the
+        per-epoch value matrix already computed by decide(t).
+        """
+        # Diagnostic: deferrals are epochs where the realized action
+        # differs from the top-V_tilde candidate (the choice the
+        # policy would make ignoring the reciprocation factor).
+        deferrals = 0
+        for i in range(self.n):
+            top_v = self._top_value_partner(i, t)
+            if top_v == NO_LINK:
+                continue
+            if int(actions[i]) != top_v:
+                deferrals += 1
+        self._record("deferrals", deferrals)
+
+        # Run base step to update pointing state.
+        super().step(t, actions)
+
+        # Invalidate per-epoch caches for the next epoch.
+        self._cached_baseline_epoch = -1
+        self._cached_baseline_matrix = None
+        self._cached_baseline_omega = None
+        self._cached_value_epoch = -1
+        self._cached_value_matrix = None
+
     # -----------------------------------------------------------------------
     # Components of Sec III
     # -----------------------------------------------------------------------
 
+    def _compute_value_matrix(self, t: int) -> np.ndarray:
+        """Compute V[i, j] = V_i(j; t) for all feasible (i, j) at epoch t.
+
+        Returns an (n, n) symmetric matrix; entries for non-feasible
+        pairs are 0. Uses the cached per-epoch Kirchhoff baseline so
+        the baseline computation runs once per epoch, not once per
+        candidate.
+        """
+        H = self.params.H
+        T_max = self.feasibility.shape[0]
+        end = min(t + H, T_max)
+
+        # Ensure the baseline cache for epoch t is populated.
+        if self._cached_baseline_epoch != t:
+            phi = np.zeros((self.n, self.n)) if self.windowed_laplacian is None else self.windowed_laplacian.phi
+            self._cached_baseline_matrix = phi + self.params.epsilon_geometric_prior * self._union_laplacian
+            self._cached_baseline_omega = kirchhoff_index(self._cached_baseline_matrix)
+            self._cached_baseline_epoch = t
+
+        baseline_matrix = self._cached_baseline_matrix
+        baseline_omega = self._cached_baseline_omega
+
+        # Lookahead feasibility count for each pair.
+        n_feasible = self.feasibility[t:end].sum(axis=0).astype(np.int64)
+
+        V = np.zeros((self.n, self.n), dtype=np.float64)
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                if n_feasible[i, j] == 0:
+                    continue
+                delta_L = np.zeros_like(baseline_matrix)
+                delta_L[i, i] += 1.0
+                delta_L[j, j] += 1.0
+                delta_L[i, j] -= 1.0
+                delta_L[j, i] -= 1.0
+                aug_omega = kirchhoff_index(baseline_matrix + delta_L)
+                v_ij = n_feasible[i, j] * (baseline_omega - aug_omega)
+                V[i, j] = v_ij
+                V[j, i] = v_ij  # symmetric
+
+        return V
+
     def _value(self, i: int, j: int, t: int) -> float:
         """V_i(j; t): raw marginal decrease in Kirchhoff index.
 
-        Computed as
-
-            V_i(j; t) = n_feasible * [Omega(baseline) - Omega(baseline + L_ij)]
-
-        where baseline = Phi(t) + epsilon * L_union_F is the policy's
-        internal evaluation graph, and n_feasible is the number of
-        epochs in [t, t+H) where (i, j) remains feasible.
-
-        Decrease in Kirchhoff index = improvement in graph connectivity.
-        Larger return value means the edge contributes more to
-        connectivity over the lookahead.
-
-        The baseline is always connected (because epsilon * L_union_F
-        is connected by Assumption 5), so the Kirchhoff index is
-        finite and the gradient is well-defined.
+        Reads from the per-epoch cache populated by decide(t). If the
+        cache hasn't been populated (e.g., direct unit-test access or
+        per-iteration calls in the equilibrium baseline), falls back
+        to single-pair computation.
         """
+        if self._cached_value_epoch == t:
+            return float(self._cached_value_matrix[i, j])
+
+        # Fallback: not in the cache. Single-pair computation.
         H = self.params.H
         T_max = self.feasibility.shape[0]
         end = min(t + H, T_max)
@@ -191,13 +257,15 @@ class PredictiveMatching(Policy):
         if n_feasible == 0:
             return 0.0
 
-        # Evaluation graph: realized history Phi plus geometric prior.
-        phi = np.zeros((self.n, self.n)) if self.windowed_laplacian is None else self.windowed_laplacian.phi
-        baseline_matrix = phi + self.params.epsilon_geometric_prior * self._union_laplacian
+        if self._cached_baseline_epoch != t:
+            phi = np.zeros((self.n, self.n)) if self.windowed_laplacian is None else self.windowed_laplacian.phi
+            self._cached_baseline_matrix = phi + self.params.epsilon_geometric_prior * self._union_laplacian
+            self._cached_baseline_omega = kirchhoff_index(self._cached_baseline_matrix)
+            self._cached_baseline_epoch = t
 
-        baseline_omega = kirchhoff_index(baseline_matrix)
+        baseline_matrix = self._cached_baseline_matrix
+        baseline_omega = self._cached_baseline_omega
 
-        # Augment with the candidate edge.
         delta_L = np.zeros_like(baseline_matrix)
         delta_L[i, i] += 1.0
         delta_L[j, j] += 1.0
@@ -205,7 +273,6 @@ class PredictiveMatching(Policy):
         delta_L[j, i] -= 1.0
         augmented_omega = kirchhoff_index(baseline_matrix + delta_L)
 
-        # Drop in Kirchhoff index, scaled by lookahead feasibility.
         return n_feasible * (baseline_omega - augmented_omega)
 
     def _switching_cost(self, i: int, j: int, t: int) -> float:
@@ -255,16 +322,42 @@ class PredictiveMatching(Policy):
         if v_max <= 0.0:
             return 0.0  # j has no positive-value candidate, picks varnothing
 
-        # Second pass: j's normalized scores (without recursing on p).
+        # Second pass: j's normalized scores (no recursion on p).
         j_scores = np.zeros(n_j_cands + 1, dtype=np.float64)
         for k, partner in enumerate(j_candidates):
             v_tilde = v_raw[k] / v_max
-            c_raw = self._switching_cost(j, partner, t)
+            c_raw = self._switching_cost(j, int(partner), t)
             c_tilde = c_raw / np.pi
             j_scores[k] = v_tilde - c * c_tilde
 
         j_choice = self._argmax_with_varnothing_preference(j_scores, j_candidates)
         return 1.0 if j_choice == i else 0.0
+
+    def _top_value_partner(self, i: int, t: int) -> int:
+        """Diagnostic helper: i's pick if it ignored p_ij."""
+        candidates = feasible_neighbors(self.feasibility, t, i)
+        if len(candidates) == 0:
+            return NO_LINK
+
+        c = self.params.switching_cost_scale
+        n_cands = len(candidates)
+
+        v_raw = np.zeros(n_cands, dtype=np.float64)
+        for k, j in enumerate(candidates):
+            v_raw[k] = self._value(i, int(j), t)
+        v_max = v_raw.max()
+
+        if v_max <= 0.0:
+            return NO_LINK
+
+        scores = np.zeros(n_cands + 1, dtype=np.float64)
+        for k, j in enumerate(candidates):
+            v_tilde = v_raw[k] / v_max
+            c_raw = self._switching_cost(i, int(j), t)
+            c_tilde = c_raw / np.pi
+            scores[k] = v_tilde - c * c_tilde
+
+        return self._argmax_with_varnothing_preference(scores, candidates)
 
     # -----------------------------------------------------------------------
     # Helpers
@@ -294,45 +387,3 @@ class PredictiveMatching(Policy):
         choice = int(self.rng.choice(tied)) if self.params.tie_break == "random" and len(tied) > 1 else int(tied[0])
 
         return int(candidates[choice])
-
-    def step(self, t: int, actions: np.ndarray) -> None:
-        """Update pointing state and record deferral diagnostics."""
-        super().step(t, actions)
-
-        # Diagnostic: deferrals are epochs where the realized action
-        # differs from the top-V_tilde candidate (the choice the
-        # policy would make ignoring the reciprocation factor).
-        deferrals = 0
-        for i in range(self.n):
-            top_v = self._top_value_partner(i, t)
-            if top_v == NO_LINK:
-                continue
-            if int(actions[i]) != top_v:
-                deferrals += 1
-        self._record("deferrals", deferrals)
-
-    def _top_value_partner(self, i: int, t: int) -> int:
-        """Diagnostic helper: i's pick if it ignored p_ij."""
-        candidates = feasible_neighbors(self.feasibility, t, i)
-        if len(candidates) == 0:
-            return NO_LINK
-
-        c = self.params.switching_cost_scale
-        n_cands = len(candidates)
-
-        v_raw = np.zeros(n_cands, dtype=np.float64)
-        for k, j in enumerate(candidates):
-            v_raw[k] = self._value(i, int(j), t)
-        v_max = v_raw.max()
-
-        if v_max <= 0.0:
-            return NO_LINK
-
-        scores = np.zeros(n_cands + 1, dtype=np.float64)
-        for k, j in enumerate(candidates):
-            v_tilde = v_raw[k] / v_max
-            c_raw = self._switching_cost(i, j, t)
-            c_tilde = c_raw / np.pi
-            scores[k] = v_tilde - c * c_tilde
-
-        return self._argmax_with_varnothing_preference(scores, candidates)

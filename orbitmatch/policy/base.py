@@ -32,8 +32,8 @@ The decision rule in :mod:`orbitmatch.policy.predictive` uses normalized
 quantities:
 
 - Value function ``V_i(j; t)`` is computed as the marginal contribution
-  of edge (i, j) to the *negative effective resistance* (Kirchhoff
-  index) of the policy's internal evaluation graph
+  of edge (i, j) to the negative effective resistance (Kirchhoff index)
+  of the policy's internal evaluation graph
   ``Phi(t) + epsilon * L_union_F``. Returns a non-negative raw value
   whose magnitude depends on the graph state. The decision rule
   normalizes by the per-satellite max over its candidates to produce
@@ -41,8 +41,8 @@ quantities:
   per-satellite normalization preserves argmax within each satellite's
   candidate set.
 
-This corresponds to the paper's §III.B-§III.D scaling. Raw values are
-preserved for diagnostics and for the §IV potential-game analysis.
+This corresponds to the paper's Sec III.B-III.D scaling. Raw values are
+preserved for diagnostics and for the Sec IV potential-game analysis.
 
 Concrete policies live in sibling modules.
 """
@@ -116,10 +116,7 @@ class PolicyParams:
         if not (0.0 <= self.switching_cost_scale <= 1.0):
             raise ValueError(f"switching_cost_scale must be in [0, 1]; got {self.switching_cost_scale}.")
         if self.epsilon_geometric_prior <= 0.0:
-            raise ValueError(
-                f"epsilon_geometric_prior must be positive; "
-                f"got {self.epsilon_geometric_prior}."
-            )
+            raise ValueError(f"epsilon_geometric_prior must be positive; got {self.epsilon_geometric_prior}.")
         if self.tie_break not in {"lowest_index", "random"}:
             raise ValueError(f"tie_break must be 'lowest_index' or 'random'; got {self.tie_break!r}.")
 
@@ -218,7 +215,7 @@ class Policy(ABC):
         Optional reference to the simulation's :class:`WindowedLaplacian`.
         The predictive policy uses it as the baseline for its value
         function. If ``None``, the policy falls back to an empty-graph
-        baseline (single-edge :math:`\\lambda_2`).
+        baseline.
     """
 
     name: str = "abstract"
