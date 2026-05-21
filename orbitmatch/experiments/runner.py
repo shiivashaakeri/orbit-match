@@ -58,6 +58,7 @@ from orbitmatch.policy.baselines import GreedyMatching, RandomMatching
 from orbitmatch.policy.equilibrium import EquilibriumMatching
 from orbitmatch.policy.k_step import KStepPredictive
 from orbitmatch.policy.level_k import LevelKPredictive
+from orbitmatch.policy.lever import LeverPredictive
 from orbitmatch.policy.predictive import PredictiveMatching
 from orbitmatch.utils.logging_setup import get_logger
 from orbitmatch.utils.seeding import make_rng
@@ -79,6 +80,7 @@ _POLICY_REGISTRY: dict[str, type[Policy]] = {
     "k_step": KStepPredictive,
     "adaptive": AdaptivePredictive,
     "level_k": LevelKPredictive,
+    "lever": LeverPredictive,
 }
 
 
