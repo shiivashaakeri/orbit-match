@@ -2,7 +2,7 @@
 
 Living document. Updated whenever scope, policies, or experiment design changes.
 
-Last revised: 2026-05-20
+Last revised: 2026-05-21 (v3 — ACC scope locked; lever exploration and consensus added; journal extensions split out)
 
 ---
 
@@ -50,42 +50,52 @@ orbit-match/
 
 ## 3. Policies
 
-The repository implements six policies. Three are paper-bound, three
-are reference baselines or motivated by the paper's §IV.D Remark.
+The repository implements many policies. **Only three appear in the ACC
+paper** (predictive + greedy + random). The others were explored as
+candidates for headline or refinement during development but were cut
+for either model-amendment reasons or because they did not Pareto-dominate
+the baseline. They are preserved in the code for reproducibility and
+journal-extension work.
 
-| Policy             | Class                         | Role                                                                                  |
-|--------------------|-------------------------------|---------------------------------------------------------------------------------------|
-| `predictive`       | `PredictiveMatching`          | The paper's headline policy. One-step BR with the indicator $p_{ij}$ of eq. 17.       |
-| `greedy`           | `GreedyMatching`              | Baseline: $p_{ij} \equiv 1$. No reciprocation prediction.                             |
-| `random`           | `RandomMatching`              | Baseline: uniformly random feasible partner per epoch.                                |
-| `equilibrium`      | `EquilibriumMatching`         | Gauss-Seidel BR to fixed point, warm-started from `predictive`. Reference ceiling.    |
-| `k_step`           | `KStepPredictive`             | Exactly $k$ rounds of BR. `mode ∈ {sync, gauss_seidel}`. Used for the §V $k$-ablation. |
-| `adaptive`         | `AdaptivePredictive`          | $k=1$ by default; escalates to $k_{\max}$ only when top-two score gap $< \delta$.      |
+### ACC-paper policies
 
-### Boundary cases (verified in `scripts/check_k_step.py` and `check_adaptive.py`)
+| Policy             | Class                         | Role in paper                                                                |
+|--------------------|-------------------------------|------------------------------------------------------------------------------|
+| `predictive`       | `PredictiveMatching`          | The paper's proposed policy. One-step BR with the indicator $p_{ij}$ (eq. 17). |
+| `greedy`           | `GreedyMatching`              | Baseline: $p_{ij} \equiv 1$. Demonstrates request efficiency of predictive.    |
+| `random`           | `RandomMatching`              | Baseline: uniformly random feasible partner. Sets the floor for $\rho$.        |
+
+### Internal exploration (not in the ACC paper)
+
+| Policy             | Class                         | Why explored, why cut                                                      |
+|--------------------|-------------------------------|----------------------------------------------------------------------------|
+| `equilibrium`      | `EquilibriumMatching`         | GS BR to convergence; *dominated* by k1_gs (F13). Cut for clarity. |
+| `k_step`           | `KStepPredictive`             | Family with $k$ BR sweeps in either sync or GS mode. Synchronous family is degenerate (collapses at $k=1$). GS at $k=1$ gives zero waste but requires broadcast assumption. Out of ACC scope. |
+| `adaptive`         | `AdaptivePredictive`          | Mid-range cost/quality variant. Beaten by k1_gs. Not paper-headline. |
+| `level_k`          | `LevelKPredictive`            | Cognitive hierarchy. Collapses to level 1 on Walker (F16). |
+| `lever`            | `LeverPredictive`             | Predictive + scarcity weighting + history-aware $p_{ij}$. Pareto-explored; baseline always best on coverage (F17). |
+
+### Boundary cases (verified)
 
 - `k_step(k=0, mode=*)` ≡ `greedy`. Every satellite picks top-V; no BR.
-- `k_step(k=1, mode=*)` ≡ `predictive`. One BR sweep against the level-0 profile.
-- `k_step(k=∞, mode=gauss_seidel)` from level-0 ≈ `equilibrium`, but not identical
-  (equilibrium warm-starts from level-1 = predictive's output, not level-0).
-- `adaptive(k_max=1)` ≡ `predictive`. No room to escalate.
-- `adaptive(δ=0)` ≡ `predictive`. No satellite is ambiguous (gap ≥ 0 always; strict $\delta = 0$ never triggers escalation).
-- `adaptive(δ=∞)` ≈ `k_step(k=k_max, mode=gauss_seidel)` from level-1 warm-start.
+- `k_step(k=1, mode="sync")` ≡ `predictive`. One BR sweep against the level-0 profile.
+- `level_k(level=0)` ≡ `greedy`.
+- `level_k(level=1)` ≡ `predictive`.
+- `adaptive(k_max=1)` ≡ `predictive`.
+- `adaptive(δ=0)` ≡ `predictive`.
+- `lever(scarcity_beta=0, history_gamma=0)` ≡ `predictive`.
 
 ### What the paper proposes vs. what we implement
 
-The paper of §III proposes **one policy**: `predictive` with the
-one-step BR indicator. The paper's §IV proves this policy achieves
-the certificate. The paper's §IV.D Remark mentions the existence of
-the level-$k$ family ("k-step predictors implement k rounds, in the
-limit converging to NE") without developing or naming members of it.
+The paper proposes **one policy**: `predictive`. The paper presents
+this policy with two baselines (greedy, random) and validates Theorem
+6 empirically.
 
-We implement the level-$k$ family explicitly because (i) the paper's
-own Remark calls it out, (ii) §V benefits from quantifying how much
-predictive leaves on the table by stopping at $k=1$, and (iii) the
-`adaptive` variant turned out to be a strong middle ground that's
-worth claiming in the paper. None of this requires new theory:
-Theorem 6 holds for any truncation depth.
+All other policies above were explored during the development cycle
+documented in `EXPERIMENTS_LOG.md`. Findings F11-F17 in `FINDINGS.md`
+summarize what each variant taught us. None of them survived to the
+ACC paper, but the exploration validates that the baseline policy is
+on the Pareto frontier of the design space (F17).
 
 ---
 
@@ -108,15 +118,15 @@ constellation:
 
 | Plot | Script | Status | Purpose |
 |---|---|---|---|
-| Plot 1 (Fig 1) | `scripts/run_lambda2_traces.py` | ✅ Run; rendered | $\lambda_2$ traces for 4 policies; the headline. |
-| Plot 2 (Fig 2) | `scripts/run_horizon_ablation.py` | ⏳ Stub | $\bar\lambda_2$ vs lookahead horizon $H$. |
-| Plot 3 (Fig 3) | `scripts/run_k_ablation.py` | ✅ Run (first pass) | $\bar\lambda_2$ and request efficiency vs depth $k$. |
-| Plot 4 (Fig 4) | `scripts/run_scaling.py` | ⏳ Stub | $\rho$ vs constellation size $n$. |
-| Plot 5 (optional) | `scripts/run_robustness.py` | ⏳ Stub | $\lambda_2$ recovery after satellite dropout. |
+| Fig 1 ($\lambda_2$ traces) | `scripts/run_lambda2_traces.py` | ✅ Run; rendered | Certificate validation: predictive saturates $\rho$ on Walker. 3 policies (predictive, greedy, random), 3 seeds. |
+| Table 1 (request efficiency) | inline in `render_paper_figures.py` (will move to its own script) | ⏳ Numbers measured, LaTeX rendering pending | Per-epoch metrics: requests, edges, waste %. |
+| Fig 2 (consensus) | `scripts/run_consensus.py` | ✅ Run; rendered | Empirical demonstration of the corollary: geometric consensus decay on predictive's realized network. Single curve. |
 
-Plot 3 was previously slotted for scaling. The k-ablation produced
-results we want in the paper (F1, F6, F7, F8 in `FINDINGS.md`), so
-Plot 3 was repurposed. Scaling moves to Plot 4 or supplementary.
+Plot 3 (k-ablation), Plot 4 (scaling), and Plot 5 (robustness) from
+earlier drafts have been removed from the ACC paper plan. The
+k-ablation findings are absorbed into §V.E as a sentence-level
+observation (F17); scaling and robustness move to journal-extension
+material (see §11 below).
 
 ### 4.3 Headline experiment configuration
 
@@ -227,17 +237,17 @@ per job on medium). Sherman-Morrison rank-1 updates could cut this
 
 ---
 
-## 8. What is NOT yet built
+## 8. What is NOT yet built (for the ACC paper)
 
-- `scripts/run_horizon_ablation.py` (Plot 2 data)
-- `scripts/run_scaling.py` (Plot 4 data)
-- `scripts/run_robustness.py` (Plot 5 data, optional)
-- `scripts/render_tables.py` (LaTeX tables for §V)
-- `tests/test_*.py` (proper pytest coverage)
-- Paper §V (numerical experiments), §VI (conclusion), Appendix B
-  (Theorem 6 full proof)
-- Gauss-Seidel variant of `k_step` (currently sync-only); decision
-  pending after the second k-ablation run completes
+- `scripts/render_paper_figures.py` updated for the final layout:
+  Fig 1 ($\lambda_2$ traces, three policies only — drop k1_gs curve),
+  Table 1 (LaTeX table for §V.C), Fig 2 (already done).
+- §V text written (~1.5 pages of prose around Fig 1, Table 1, Fig 2)
+- §VI conclusion text
+- Appendix A (Lemma 2 full potential-game proof; currently referenced
+  but absent from the .tex)
+- Appendix B (Theorem 6 full proof; currently referenced but absent)
+- `tests/test_*.py` (proper pytest coverage; stubs only)
 
 ---
 
@@ -246,30 +256,28 @@ per job on medium). Sherman-Morrison rank-1 updates could cut this
 | Milestone | Description | Status |
 |---|---|---|
 | M1 | Repository skeleton, conventions, theme, constellation/feasibility infra | ✅ |
-| M2 | Policy library: predictive, greedy, random, equilibrium | ✅ |
-| M2.5 | Policy extensions: k_step (sync), adaptive | ✅ |
+| M2 | Core policies: predictive, greedy, random | ✅ |
+| M2.5 | Internal exploration policies: equilibrium, k_step, adaptive, level_k, lever | ✅ |
 | M3 | Sanity checks (S1-S5) | ✅ |
-| M4 | Headline experiment (Plot 1) | ✅ |
-| M4.5 | k-ablation (Plot 3, first pass) | ✅ |
-| M5 | Gauss-Seidel k_step variant + re-run ablation | ⏳ |
-| M6 | Remaining ablations (Plot 2 horizon, Plot 4 scaling) | ⏳ |
-| M7 | Render all paper figures + LaTeX tables | ⏳ |
-| M8 | §V text written, §VI conclusion, Appendix B proof | ⏳ |
-| M9 | Final paper submission to ACC 2027 (deadline ~late Sep 2026) | ⏳ |
+| M4 | Headline experiment (Fig 1) | ✅ |
+| M4.5 | Lever exploration, level-k ablation, enhancement ablation | ✅ |
+| M5 | Consensus corollary demonstration (Fig 2) | ✅ |
+| M6 | Render final paper figures + LaTeX Table 1 | ⏳ |
+| M7 | §V text, §VI conclusion, Appendices A and B | ⏳ |
+| M8 | Final paper submission to ACC 2027 (deadline ~late Sep 2026) | ⏳ |
 
 ### Recent decisions affecting this plan
 
-- **k-ablation became Plot 3** (was scaling). Scaling moved to Plot 4.
-- **Equilibrium reframed as "iterated-BR reference"** rather than a
-  co-equal algorithm. Predictive is the paper's single proposed
-  policy; equilibrium and k_step are diagnostic/analytic.
-- **Headline framing shifted from "predictive beats greedy on $\lambda_2$"
-  to "predictive achieves certificate with 37% fewer requests"** (per
-  Findings F2 and F4). Greedy ties predictive on $\lambda_2$ but
-  wastes 77% of requests.
-- **Adaptive policy added** as the "deployable middle ground" between
-  predictive and equilibrium; captures most of equilibrium's benefit
-  at 1.28× $k=1$ cost. May get a paragraph in §V and a mention in §VI.
+- **ACC scope locked to 3 policies** (predictive, greedy, random) plus
+  the design-space-exploration remark.
+- **k1_gs (sequential predictive) cut for ACC.** Empirically the
+  strongest variant, but requires a broadcast assumption that changes
+  the model. Reserved for journal extension.
+- **Equilibrium, adaptive, k_step, level_k, lever all cut for ACC.**
+  None Pareto-dominated baseline; all are internal exploration
+  recorded in FINDINGS for posterity.
+- **Plots 3, 4, 5 dropped from ACC.** k-ablation absorbed as one
+  sentence in §V.E. Scaling and robustness move to journal.
 
 ---
 
@@ -278,4 +286,16 @@ per job on medium). Sherman-Morrison rank-1 updates could cut this
 - Dated run records: `docs/EXPERIMENTS_LOG.md`
 - Durable empirical findings: `docs/FINDINGS.md`
 - Notation glossary: `docs/NOTATION.md`
+- Journal-extension experimental menu: `docs/JOURNAL_EXTENSIONS.md`
 - Paper source: `paper/predictive_matching_acc.tex`
+
+---
+
+## 11. Journal-extension scope
+
+The ACC paper presents a tight 3-policy story. The full work has more.
+Documented in `docs/JOURNAL_EXTENSIONS.md`: candidate experiments for a
+journal version (T-AC, T-CST, or similar), grouped by category
+(negative controls, theorem tightness, scaling, robustness, downstream
+tasks, comparison with state-of-the-art, sensitivity, model extensions,
+policy-design exploration, theoretical bounds vs empirics).

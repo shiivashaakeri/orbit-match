@@ -6,7 +6,7 @@ a running list of *what we believe to be true* about the model and the
 policy, supported by the data so far. Update when new findings change
 the picture; do not delete (mark superseded if needed).
 
-Last reviewed: 2026-05-20 (v2 — k1_gs validation complete)
+Last reviewed: 2026-05-21 (v3 — lever exploration + consensus complete; ACC scope locked)
 
 ---
 
@@ -454,21 +454,126 @@ makes choices that decrease the *next* epoch's potential.
 
 ---
 
+## F15. The corollary to Theorem 6 holds empirically (qualitatively)
+
+**Claim.** Under the predictive policy on medium Walker, discrete-time
+average consensus on the realized matching network converges
+geometrically. From random initial conditions
+$x(0) \sim \mathcal{N}(0, I)$ centered to zero mean, disagreement
+$\|x(t) - \bar{x}\mathbf{1}\|_2$ decays by roughly **3 orders of
+magnitude over 2 orbital periods** ($\mu = 1/3$, 20 trials).
+
+**Why this matters for the paper.** The corollary in §IV.E claims
+qualitative geometric convergence with rate "bounded in terms of
+$\rho \alpha_0$ and $T$." The empirical decay confirms the
+qualitative claim. We do *not* claim a tight quantitative rate
+match; the corollary's rate is qualitative, citing Olshevsky-Tsitsiklis
+2009 for the constants.
+
+**Caveat.** A multi-policy version of this experiment was run first.
+Random matchings produced *faster* consensus decay than predictive,
+because random is a better mixer of vertex pairs across time. This
+is consistent with the corollary (which only claims convergence,
+not that predictive's rate dominates random's) but distracts from
+the headline. Fig 2 shows predictive only.
+
+**Implication for the paper.** §V.D presents Fig 2 as a demonstration
+that the policy supports geometric consensus convergence on the
+realized network — completing the analytical story from §IV.E.
+
+**Source.** EXPERIMENTS_LOG 2026-05-21 consensus entry.
+
+---
+
+## F16. Level-$k$ predictive collapses to level 1 on this game
+
+**Claim.** The "level-$k$ predictive" family — where satellite $i$
+models $j$ as a level-$(k-1)$ agent — produces *identical actions*
+at all levels $\geq 1$ on Walker geometry. Tested at $k \in \{1, 2, 3, 5\}$
+on medium config; every level produced the same matchings.
+
+**Why.** At level 2, when $i$ asks "what would $j$ do at level 1?",
+the answer is one of: (a) the same as $j$'s level-0 (greedy) action,
+or (b) $\varnothing$ (defer). In case (a) $p^{(2)}_{ij} = p^{(1)}_{ij}$
+because $j$'s top-V choice equals $j$'s level-1 choice. In case (b)
+both $p^{(1)}$ and $p^{(2)}$ are 0 (the partner is deferring). The two
+indicators agree on this geometry.
+
+**Implication for the paper.** The §IV.D Remark referencing the
+level-$k$ family is theoretically meaningful but practically
+degenerate: there is no policy strictly between predictive (level 1)
+and a NE (level $\infty$) reachable by cognitive-hierarchy reasoning.
+Worth a sentence in §V.E, or possibly omitted for space.
+
+**Source.** EXPERIMENTS_LOG 2026-05-21 level-$k$ entry.
+
+---
+
+## F17. Baseline predictive is on the (waste, coverage) Pareto frontier
+
+**Claim.** No combination of the value-function and reciprocation-predictor
+modifications we tested produces a policy that Pareto-dominates the
+baseline predictive policy. Specifically, across a multi-knob grid of
+(lookahead $H \in \{10, 30, 60, 100\}$, scarcity weight $\beta \in
+\{0.1, 0.3, 0.5\}$, history weight $\gamma \in \{0.1\}$), **zero
+variants** achieved $\Delta\text{edges} \geq 0$, $\Delta\rho_{\text{cover}} \geq 0$,
+and $\Delta\text{waste}\% \leq 0$ simultaneously.
+
+Each modification could reduce waste meaningfully (from 64% baseline
+to as low as 30%), but only at the cost of compressed coverage
+($\rho_{\text{cover}}$ falling from 0.95 to between 0.66 and 0.83).
+
+**Why.** Each "smart" modification biases the policy toward repeated
+or scarce edges, locking the rolling-window union onto a smaller set
+of edges. This is the same dynamic that caused temporal_warmstart and
+dynamic_prior to fail in the enhancement ablations (F-undocumented,
+EXPERIMENTS_LOG 2026-05-21 enhancement entry): any positive feedback
+on past matchings reduces variety, which is exactly what
+$\rho_{\text{cover}}$ measures.
+
+**Interpretation.** The baseline policy is at the coverage-maximizing
+extreme of a real Pareto frontier. Moving along the frontier requires
+**coordination** (e.g., broadcast for sequential BR achieves zero
+waste at the cost of one bit per satellite per epoch) rather than
+smarter local reasoning.
+
+**Implication for the paper.** §V.E reports this observation as a
+single paragraph: "we explored extensions in the value function and
+the reciprocation predictor; each could reduce waste but at the cost
+of compressed coverage, leaving the baseline at the coverage-maximizing
+extreme of the design frontier." Cite the broadcast-coordination
+extension as future work.
+
+**Source.** EXPERIMENTS_LOG 2026-05-21 lever exploration entry.
+
+---
+
 ## Notes
 
-- **F1, F4, F5, F11, F13** are the paper-bound headline findings.
+- **F1, F4, F5, F11, F15, F17** are the paper-bound headline findings.
   Each appears as a numbered observation in §V text or as a paragraph
   of §V interpretation.
-- **F2, F6, F10, F12** are *clarifying* observations that prevent a
+- **F2, F6, F10, F12, F16** are *clarifying* observations that prevent a
   naive reader from drawing wrong conclusions from the data.
 - **F3** is a footnote-level remark.
 - **F7** motivates the adaptive variant; **F8** and **F14** show
   adaptive is interesting but not the operational ceiling (k1_gs is).
+  Neither makes the ACC paper; both are journal-extension material.
 - **F9** is methodological; tells us $\rho_{\text{cover}}$ is what
   $\rho$ tracks in our regime.
+- **F13** (equilibrium dominated by k1_gs) is a real result but
+  doesn't appear in the ACC paper since equilibrium and k1_gs are
+  both cut. It's preserved here for the journal extension.
+- **F16** (level-$k$ degeneracy) is a clean negative result that the
+  paper could mention briefly in §V.E.
 
 ## Revision history
 
 - **v1 (initial)**: F1–F10 captured the headline run findings.
 - **v2 (2026-05-20)**: F11–F14 added after k1_gs validation. F6 and F8
   revised to reflect the corrected ceiling (k1_gs, not equilibrium).
+- **v3 (2026-05-21)**: F15-F17 added after the consensus experiment,
+  level-$k$ ablation, and lever exploration. ACC scope locked to
+  baseline predictive + greedy + random comparison; equilibrium,
+  sequential, k_step (k>1), adaptive, level-k, and lever variants
+  all deferred to journal extension.

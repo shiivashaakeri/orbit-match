@@ -5,7 +5,7 @@ and the code. The paper introduces most of these in §II–§IV; this doc
 adds entries for symbols that came up in implementation or empirical
 analysis but don't all appear in the paper.
 
-Last revised: 2026-05-20
+Last revised: 2026-05-21 (v2 — lever-policy symbols added)
 
 ---
 
@@ -89,6 +89,21 @@ the parameter. We use $k$ explicitly because we ablate over it.
 | $k = \infty$ | BR iterated to a fixed point. Under Gauss-Seidel update order, this is a NE of $\Gamma_t$. |
 | $\delta$ | Gap threshold for the adaptive policy. Each satellite escalates to $k_\max$ if its top two normalized scores differ by less than $\delta$. Currently $\delta = 0.1$. |
 | $k_\max$ | Maximum recursion depth in the adaptive policy. Currently $k_\max = 3$. |
+
+---
+
+## Lever-policy symbols (internal exploration; not in ACC paper)
+
+These appear in `orbitmatch/policy/lever.py` and the lever-exploration
+EXPERIMENTS_LOG entry. None of these are in the ACC paper's notation.
+
+| Symbol | Meaning |
+|---|---|
+| $\beta$ | Scarcity-weight coefficient in `LeverPredictive`. Multiplies $V_{ij}$ by $(1 + \beta s_{ij})$. |
+| $s_{ij}$ | Scarcity score for edge $(i, j)$: $1 - $ (fraction of orbit during which $(i, j)$ is feasible). In $[0, 1)$. |
+| $\gamma$ | History-weight coefficient in `LeverPredictive`. Multiplies the eq.17 indicator by $(1 + \gamma h_{ij})$. |
+| $h_{ij}(t)$ | Recent-link frequency: fraction of past $W$ epochs in which $(i, j)$ formed a mutual link. In $[0, 1]$. |
+| $W$ | Window length for history aggregation. Defaults to $T$ (one certificate window). |
 
 ---
 

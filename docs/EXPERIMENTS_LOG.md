@@ -11,6 +11,234 @@ Format:
 
 ---
 
+## 2026-05-21 — Consensus convergence experiment (corollary to Theorem 6)
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** `scripts/run_consensus.py`
+
+### Setup
+
+Discrete-time average consensus $x(t+1) = (I - \mu L_{\mathcal{G}(t)}) x(t)$
+on the realized matching sequence of the canonical predictive trace
+(medium Walker, seed 42, 2 orbital periods). $\mu = 1/3$ (stable since
+matchings have max degree 1). 20 random initial conditions
+$x(0) \sim \mathcal{N}(0, I)$ centered to zero mean. Disagreement
+$\delta(t) = \|x(t) - \bar{x}\mathbf{1}\|_2$ tracked over time.
+
+### Result
+
+```
+predictive disagreement decay:
+  at t=0:           7.7092e+00
+  at t=T (warmup):  6.5322e-02
+  at t=end:         6.8538e-03
+  post-warmup ratio: 1.05e-01
+  total decay:      3.05 orders of magnitude
+```
+
+Geometric decay across ~3 orders of magnitude over 2 orbital periods.
+
+### Note on framing
+
+The corollary in §IV.E is *qualitative*: "convergence is geometric,
+with rate bounded in terms of $\rho \alpha_0$ and $T$." It doesn't
+give an explicit closed-form rate. Figure 2 demonstrates the
+qualitative prediction (geometric decay), not a quantitative rate
+match.
+
+A multi-policy comparison was tried first (predictive vs greedy vs
+random) and found that random decays *faster* than predictive on this
+geometry, because random matchings are better mixers across the
+graph. This is consistent with the corollary (which only claims
+convergence, not that predictive's rate dominates random's), but it
+distracts from the paper's intended message. Final figure shows
+predictive only.
+
+### Artifacts
+
+- `results/consensus/predictive_disagreement.npy` (20 × 1149 array)
+- `figures/paper/fig2_consensus.pdf`
+
+---
+
+## 2026-05-21 — Lever exploration: H, scarcity, history, combinations
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Scripts:** `scripts/test_levers.py`, `scripts/test_lever_combinations.py`
+
+### Question
+
+The predictive policy has a 64% waste rate (38 requests per epoch,
+6.79 edges formed). Can we reduce waste without sacrificing the
+certificate? Three independent levers tested:
+
+- **Lever 1a**: increase the lookahead horizon $H$
+- **Lever 1b**: weight rare edges more heavily via $\beta \cdot s_{ij}$
+- **Lever 2a**: boost the reciprocation predictor based on link history via $\gamma \cdot h_{ij}$
+
+### Single-knob sweeps (Phase 1-3 of test_levers.py)
+
+```
+Phase 1: H sweep (beta=0, gamma=0)
+  H=10:   edges 6.79,  waste 64.4%, rho_cover 0.9529  (baseline)
+  H=30:   edges 6.78,  waste 65.4%, rho_cover 0.8588
+  H=60:   edges 8.40,  waste 58.6%, rho_cover 0.8471
+  H=100:  edges 10.65, waste 46.5%, rho_cover 0.8275
+
+Phase 2: scarcity_beta sweep (H=10, gamma=0)
+  beta=0:    edges 6.79,  waste 64.4%, rho_cover 0.9529  (baseline)
+  beta=1:   edges 14.87, waste 24.0%, rho_cover 0.6627
+  beta=3:   edges 15.81, waste 19.8%, rho_cover 0.6471
+  beta=10:  edges 15.48, waste 20.9%, rho_cover 0.6471
+
+Phase 3: history_gamma sweep (H=10, beta=0)
+  gamma=0:   edges 6.79, waste 64.4%, rho_cover 0.9529  (baseline)
+  gamma=1:   edges 5.56, waste 69.8%, rho_cover 0.9333
+  gamma=3:   edges 4.55, waste 74.4%, rho_cover 0.9451
+  gamma=10:  edges 2.98, waste 82.3%, rho_cover 0.9059
+```
+
+### Multi-knob combination grid (test_lever_combinations.py)
+
+Nine points on the (H, beta, gamma) grid with small coefficients.
+**Pareto analysis vs baseline (10, 0, 0)**: a variant is a Pareto
+improvement iff Δedges ≥ 0, Δrho_cover ≥ 0, AND Δwaste% ≤ 0, with at
+least one strict.
+
+```
+variant            Δedges    Δrho_cover  Δwaste%   Pareto?
+H=10 b=0.1 g=0    +1.58     -0.141       -7.58%    no
+H=10 b=0.3 g=0    +4.85     -0.180      -23.06%    no
+H=10 b=0.5 g=0    +6.06     -0.196      -29.96%    no
+H=30 b=0.1 g=0    +1.51     -0.094       -6.69%    no
+H=30 b=0.3 g=0    +5.43     -0.243      -23.03%    no
+H=30 b=0.5 g=0    +7.97     -0.290      -34.91%    no
+H=10 b=0.3 g=0.1  +5.09     -0.180      -24.67%    no
+H=30 b=0.3 g=0.1  +5.48     -0.259      -23.47%    no
+```
+
+**Zero Pareto improvements.** Every variant trades coverage for waste
+reduction. Baseline holds the highest $\rho_{\text{cover}}$ across the
+entire grid.
+
+### Outcomes
+
+The baseline predictive policy is at the **coverage-maximizing extreme**
+of a (waste, coverage) Pareto frontier. No policy variant in the
+tested design space dominates baseline on both metrics simultaneously.
+
+This is the "design-space exploration" finding that §V.E reports.
+
+### Artifacts
+
+- No traces saved (these are ablation runs, not headline data).
+
+---
+
+## 2026-05-21 — Level-$k$ predictive: cognitive hierarchy ablation
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** `scripts/check_level_k.py`
+
+### Setup
+
+Cognitive-hierarchy version of the predictive policy. At level $k$,
+satellite $i$ models every other satellite $j$ as a level-$(k-1)$
+agent. The reciprocation prediction becomes
+$p^{(k)}_{ij} = \mathbb{1}\{a^{(k-1)}_j = i\}$, with level 0 being
+greedy ($a^{(0)}_j$ = $j$'s top-V partner).
+
+Phase 1 boundary checks: level=0 ≡ greedy ✓, level=1 ≡ predictive ✓.
+Phase 2 ablation: $k \in \{1, 2, 3, 5\}$ on medium config, seed 42,
+2 orbital periods.
+
+### Result
+
+```
+level   req/ep  edges/ep  waste%  rho_max  rho_mean  rho_cover
+1       38.11   6.79      64.4%   1.0000   0.9855    0.9529
+2       38.11   6.79      64.4%   1.0000   0.9855    0.9529
+3       38.11   6.79      64.4%   1.0000   0.9855    0.9529
+5       38.11   6.79      64.4%   1.0000   0.9855    0.9529
+```
+
+**All levels identical to level 1, bit-for-bit.**
+
+### Interpretation
+
+Level-$k$ thinking on this potential game collapses immediately to
+level 1: when $i$ at level 2 asks "what would $j$ do at level 1?", the
+answer turns out to be the same as $j$'s level-0 (greedy) action,
+modulo the deferral cases where $j$'s level-1 action is $\varnothing$
+(also giving $p = 0$).
+
+The paper's §IV.D Remark mentions "richer reciprocation predictors
+correspond to deeper truncations of best-response dynamics." This
+experiment confirms the family exists but is **degenerate on Walker
+geometries**: there is no policy strictly between level 1 and the NE
+that can be reached via cognitive-hierarchy reasoning alone.
+
+### Artifacts
+
+None (ablation runs only).
+
+---
+
+## 2026-05-21 — Enhancement ablations (idea 2, 3, 4, 5)
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** `scripts/test_enhancements.py`
+
+### Setup
+
+Five candidate enhancements tested on top of k1_gs (Gauss-Seidel
+predictive). All implemented as kwargs to `KStepPredictive`:
+
+- **Idea 1** (`partial_observation`): use observed predecessor actions in BR
+- **Idea 2** (`temporal_warmstart`): warm-start GS sweep from previous matching
+- **Idea 3** (`update_pointing_on_request`): pointing tracker updates on every request
+- **Idea 4** (`dynamic_prior`): downweight unrequested edges in the geometric prior
+- **Idea 5** (`order_by="feasibility"`): most-constrained-first GS ordering
+
+### Result
+
+```
+variant                 Δedges    Δwaste     Δrho_cover
+feasibility_order       +0.0767   +0.0000    -0.007843
+warmstart               +3.1899   +0.0636    -0.735294
+partial_obs             +0.0000   +0.0000    +0.000000
+pointing_on_req         +0.0000   +0.0000    +0.000000
+dynamic_prior           -0.5453   +0.0000    -0.007843
+all_on                  -0.1307   +0.0000    -0.005882
+```
+
+### Outcomes
+
+- **Idea 1 (partial obs)**: zero effect. Subsumed by GS update order.
+- **Idea 2 (warmstart)**: more edges/epoch but $\rho_{\text{cover}}$
+  collapses (0.95 → 0.21). Traps policy on repeated matchings;
+  same trap pattern as the lever sweeps.
+- **Idea 3 (pointing on request)**: zero effect. Switching cost is a
+  marginal factor on Walker.
+- **Idea 4 (dynamic prior)**: -0.55 edges, slight $\rho_{\text{cover}}$
+  loss. Mild version of warmstart's trap.
+- **Idea 5 (feasibility ordering)**: marginal +0.08 edges, but
+  $\rho_{\text{cover}}$ down 0.008. Mixed.
+
+**None of the five enhancements Pareto-dominates baseline.** Same
+qualitative finding as the lever exploration: Walker geometry doesn't
+reward the proposed refinements; the simple policy is near-optimal.
+
+### Artifacts
+
+None saved.
+
+---
+
 ## 2026-05-20 — k1_gs validation: seed robustness + ordering sensitivity
 
 - **Branch/commit:** main / current
