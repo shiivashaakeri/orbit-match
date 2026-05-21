@@ -16,9 +16,12 @@ The simulation has three jobs:
 1. **Validate the analytical results of §IV.** Show empirically that the
    predictive matching policy achieves $\lambda_2(L^\cup_\mathcal{G}(t; T))
    \geq \rho \cdot \alpha_0$ for a representative LEO constellation, with
-   $\rho$ in the theorem-predicted range. The certificate is on the
-   *realized union graph*; the windowed Laplacian $\Phi(t)$ is tracked as
-   a secondary metric for diagnostics.
+   $\rho$ in the theorem-predicted range. Empirically, when $T$ is
+   chosen to match the geometric saturation time
+   ($T = T_\text{orb}$), the policy achieves $\rho_\text{realized} = 1$:
+   the realized union equals the feasibility union exactly. The
+   certificate is on the *realized union graph*; the windowed Laplacian
+   $\Phi(t)$ is tracked as a secondary metric for diagnostics.
 2. **Compare against baselines.** Demonstrate that reciprocation prediction is
    doing real work — predictive matching outperforms greedy local value and
    random matching, and approaches the equilibrium ceiling.

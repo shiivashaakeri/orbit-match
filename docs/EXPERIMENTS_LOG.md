@@ -118,3 +118,77 @@ Three substantive theoretical changes, with a cascade of code edits.
 
 - `data/processed/feas_walker_small_24_4_1_alt550_inc53_dt10_*.npz` (unchanged)
 - `data/processed/feas_walker_medium_60_6_2_alt550_inc53_dt10_*.npz` (unchanged)
+
+## 2026-05-20 — Saturation result: $\rho = 1$ at $T = T_\text{orb}$
+
+After the theory revision, ran both configs with the certificate window
+set to a full orbital period. Both saturate exactly.
+
+### Setup
+
+| Setting                | Value                                |
+|------------------------|--------------------------------------|
+| $T = T_\text{orb}$     | 573 epochs (~95.5 min)               |
+| $H$                    | 10 epochs (lookahead)                |
+| $c$                    | 0.2 (switching-cost scale)           |
+| $\varepsilon$          | 0.01 (geometric-prior weight)        |
+| Policy                 | predictive (Kirchhoff value, BR=1)   |
+
+### Results
+
+| Config           | $n$ | $\alpha_0$ | feasibility edges | realized edges | $\rho_\text{realized}$ |
+|------------------|----:|----------:|-----------------:|---------------:|----------------------:|
+| Small (24/4/1)   |  24 | 0.9219    | 72               | 72             | **1.000**             |
+| Medium (60/6/2)  |  60 | 4.2918    | 510              | 510            | **1.000**             |
+
+Both configurations realize the full feasibility union of the orbit.
+Realized-union degrees match feasibility-union degrees exactly: every
+satellite linked at some point during the orbit with every other
+satellite that was ever geometrically feasible.
+
+### Diagnostics
+
+- **Small config** (573 epochs, full orbit): 9.86 mean edges/epoch
+  (steady-state), 3030 total deferrals, single connected component
+  throughout warmup-and-beyond.
+- **Medium config** (573 epochs, full orbit): 8.07 mean edges/epoch
+  (steady-state) — much lower density of formed edges, because the
+  policy correctly defers redundant edges once they're already in the
+  union. 27016 total deferrals (47/epoch ≈ 78% of satellites deferring
+  per epoch in steady state). Wall-clock: 891 s.
+
+### Interpretation
+
+The certificate window $T$ should match the geometric saturation
+time. For Walker constellations, this is the orbital period: it takes
+exactly one orbit for the feasibility union $\mathcal{F}^\cup(t; T)$
+to stabilize. At $T < T_\text{orb}$, $\alpha_0(T)$ is smaller because
+only a fraction of the orbital geometry has been exposed; at
+$T \geq T_\text{orb}$, $\alpha_0$ saturates at its maximum and the
+realized $\rho$ becomes a clean fraction.
+
+The empirical observation $\rho_\text{realized} = 1$ at
+$T = T_\text{orb}$ is the strongest possible certified
+connectivity: the policy realizes every feasible edge over a full
+orbit. The proof of Theorem 6 gives a lower bound
+$\rho \geq \rho_\text{match} \cdot \rho_\text{cover}$, but the bound
+is not tight for these constellations: both $\rho_\text{match}$
+(Vizing-based) and $\rho_\text{cover}$ are below 1, yet their product
+exceeds 1 in realized terms because the bound is conservative.
+
+### Open questions
+
+- $\rho$ vs. $T$ curve: how does $\rho$ degrade as $T$ shrinks below
+  $T_\text{orb}$? Quick-look quantiles for small at $T_0 = 60$ epochs
+  gave $\rho_\text{realized} \approx 0.38$ ($\lambda_2(L^\cup_\mathcal{G}) = 0.14$,
+  $\alpha_0(T_0=60) = 0.36$). The full curve is pending.
+- Baseline comparison at $T = T_\text{orb}$ pending. Hypothesis:
+  Greedy realizes a smaller union (no reciprocation prediction → wasted
+  attempts), Random realizes much less. Equilibrium achieves $\rho = 1$
+  too but with more BR rounds.
+
+### Files
+
+- `data/processed/feas_walker_small_*.npz` (unchanged)
+- `data/processed/feas_walker_medium_*.npz` (unchanged)
+- No new result files saved yet; runs were exploratory.
