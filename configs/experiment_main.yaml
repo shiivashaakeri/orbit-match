@@ -34,7 +34,7 @@ policies:
   - equilibrium
 
 simulation:
-  duration_periods: 3.0
+  duration_periods: 2.0
   dt_s: 10.0
   T: orbital_period
   seeds: [42, 43, 44]

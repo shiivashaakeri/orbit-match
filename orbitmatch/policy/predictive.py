@@ -96,6 +96,14 @@ class PredictiveMatching(Policy):
         self._cached_value_epoch: int = -1
         self._cached_value_matrix: np.ndarray | None = None
 
+        # Per-epoch cache: for each satellite j, the partner that j
+        # would pick if it ignored reciprocation (its top-V choice
+        # under the c-discounted score). Populated once per epoch by
+        # _compute_top_value_partners and used by _reciprocation_prob
+        # and the deferral diagnostic. Invalidated by step().
+        self._cached_top_partner_epoch: int = -1
+        self._cached_top_partners: np.ndarray | None = None
+
         log.info(
             "PredictiveMatching: H=%d, T=%d, c=%.3f, epsilon=%.4f, Kirchhoff baseline = %.2f",
             self.params.H,
@@ -119,6 +127,14 @@ class PredictiveMatching(Policy):
         if self._cached_value_epoch != t:
             self._cached_value_matrix = self._compute_value_matrix(t)
             self._cached_value_epoch = t
+
+        # Precompute every satellite's top-V partner (the choice it
+        # would make ignoring reciprocation). _reciprocation_prob and
+        # the deferral diagnostic read from this cache; otherwise both
+        # would re-derive the same answer per call.
+        if self._cached_top_partner_epoch != t:
+            self._cached_top_partners = self._compute_top_value_partners(t)
+            self._cached_top_partner_epoch = t
 
         actions = np.full(self.n, NO_LINK, dtype=np.int64)
         for i in range(self.n):
@@ -190,6 +206,8 @@ class PredictiveMatching(Policy):
         self._cached_baseline_omega = None
         self._cached_value_epoch = -1
         self._cached_value_matrix = None
+        self._cached_top_partner_epoch = -1
+        self._cached_top_partners = None
 
     # -----------------------------------------------------------------------
     # Components of Sec III
@@ -301,40 +319,74 @@ class PredictiveMatching(Policy):
     def _reciprocation_prob(self, i: int, j: int, t: int) -> float:
         """p_ij(t): one-step best-response indicator.
 
-        Simulates j's decision under the same per-satellite normalized
-        rule. Returns 1.0 if i is j's choice, else 0.0.
+        Reads from the per-epoch top-value-partner cache populated by
+        decide(t). Returns 1.0 iff j's top-V choice (the choice j
+        would make ignoring reciprocation) is i. Falls back to a full
+        computation if the cache is not populated (e.g. unit tests
+        calling this method directly).
         """
-        j_candidates = feasible_neighbors(self.feasibility, t, j)
-        if len(j_candidates) == 0:
-            return 0.0
-        if i not in j_candidates:
-            return 0.0
+        if self._cached_top_partner_epoch == t and self._cached_top_partners is not None:
+            return 1.0 if int(self._cached_top_partners[j]) == i else 0.0
 
-        c = self.params.switching_cost_scale
-        n_j_cands = len(j_candidates)
-
-        # First pass: j's raw values.
-        v_raw = np.zeros(n_j_cands, dtype=np.float64)
-        for k, partner in enumerate(j_candidates):
-            v_raw[k] = self._value(j, int(partner), t)
-        v_max = v_raw.max()
-
-        if v_max <= 0.0:
-            return 0.0  # j has no positive-value candidate, picks varnothing
-
-        # Second pass: j's normalized scores (no recursion on p).
-        j_scores = np.zeros(n_j_cands + 1, dtype=np.float64)
-        for k, partner in enumerate(j_candidates):
-            v_tilde = v_raw[k] / v_max
-            c_raw = self._switching_cost(j, int(partner), t)
-            c_tilde = c_raw / np.pi
-            j_scores[k] = v_tilde - c * c_tilde
-
-        j_choice = self._argmax_with_varnothing_preference(j_scores, j_candidates)
-        return 1.0 if j_choice == i else 0.0
+        # Fallback path: no cache; recompute j's top-V choice in full.
+        return 1.0 if self._top_value_partner_uncached(j, t) == i else 0.0
 
     def _top_value_partner(self, i: int, t: int) -> int:
-        """Diagnostic helper: i's pick if it ignored p_ij."""
+        """Diagnostic helper: i's pick if it ignored p_ij.
+
+        Reads from the per-epoch cache populated by decide(t). Falls
+        back to a full computation if the cache is missing.
+        """
+        if self._cached_top_partner_epoch == t and self._cached_top_partners is not None:
+            return int(self._cached_top_partners[i])
+        return self._top_value_partner_uncached(i, t)
+
+    def _compute_top_value_partners(self, t: int) -> np.ndarray:
+        """Compute every satellite's top-V partner for epoch t in one pass.
+
+        Returns an (n,) int64 array where entry i is satellite i's
+        top-V choice (the partner i would request if it ignored p_ij),
+        or :data:`NO_LINK` (-1) if i has no positive-value candidate.
+
+        Reads from the per-epoch value-matrix cache, so the only
+        per-candidate work is the switching-cost geometry. Same logic
+        as :meth:`_top_value_partner_uncached`, but writes results for
+        all i in one go and avoids the redundant per-i fallback path.
+        """
+        partners = np.full(self.n, NO_LINK, dtype=np.int64)
+        c = self.params.switching_cost_scale
+
+        for i in range(self.n):
+            candidates = feasible_neighbors(self.feasibility, t, i)
+            if len(candidates) == 0:
+                continue
+
+            n_cands = len(candidates)
+            v_raw = np.zeros(n_cands, dtype=np.float64)
+            for k, j in enumerate(candidates):
+                v_raw[k] = self._value(i, int(j), t)
+            v_max = v_raw.max()
+            if v_max <= 0.0:
+                continue
+
+            scores = np.zeros(n_cands + 1, dtype=np.float64)
+            for k, j in enumerate(candidates):
+                v_tilde = v_raw[k] / v_max
+                c_raw = self._switching_cost(i, int(j), t)
+                c_tilde = c_raw / np.pi
+                scores[k] = v_tilde - c * c_tilde
+
+            partners[i] = self._argmax_with_varnothing_preference(scores, candidates)
+
+        return partners
+
+    def _top_value_partner_uncached(self, i: int, t: int) -> int:
+        """Compute satellite i's top-V partner from scratch (no cache).
+
+        Used as a fallback when the per-epoch cache has not been
+        populated (e.g. unit tests calling _reciprocation_prob or
+        _top_value_partner directly).
+        """
         candidates = feasible_neighbors(self.feasibility, t, i)
         if len(candidates) == 0:
             return NO_LINK
@@ -346,7 +398,6 @@ class PredictiveMatching(Policy):
         for k, j in enumerate(candidates):
             v_raw[k] = self._value(i, int(j), t)
         v_max = v_raw.max()
-
         if v_max <= 0.0:
             return NO_LINK
 
