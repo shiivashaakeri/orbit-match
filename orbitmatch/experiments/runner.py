@@ -54,6 +54,7 @@ from orbitmatch.graph.laplacian import actions_to_edges
 from orbitmatch.graph.windowed import WindowedLaplacian, WindowedUnion
 from orbitmatch.policy.base import Policy, PolicyParams
 from orbitmatch.policy.baselines import GreedyMatching, RandomMatching
+from orbitmatch.policy.equilibrium import EquilibriumMatching
 from orbitmatch.policy.predictive import PredictiveMatching
 from orbitmatch.utils.logging_setup import get_logger
 from orbitmatch.utils.seeding import make_rng
@@ -71,14 +72,12 @@ _POLICY_REGISTRY: dict[str, type[Policy]] = {
     "predictive": PredictiveMatching,
     "greedy": GreedyMatching,
     "random": RandomMatching,
-    # "equilibrium": EquilibriumMatching,  # TODO: see policy/equilibrium.py
+    "equilibrium": EquilibriumMatching,
 }
 
 
 def get_policy_class(name: str) -> type[Policy]:
     """Return the Policy subclass registered under ``name``."""
-    if name == "equilibrium":
-        raise NotImplementedError("EquilibriumMatching not yet implemented. See orbitmatch/policy/equilibrium.py.")
     if name not in _POLICY_REGISTRY:
         raise KeyError(f"Unknown policy {name!r}. Known: {sorted(_POLICY_REGISTRY)}.")
     return _POLICY_REGISTRY[name]
