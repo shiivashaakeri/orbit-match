@@ -150,10 +150,27 @@ def main() -> int:
     print()
 
     variants = [
-        ("baseline_gs",       dict(order_by="identity",    temporal_warmstart=False)),
-        ("feasibility_order", dict(order_by="feasibility", temporal_warmstart=False)),
-        ("warmstart",         dict(order_by="identity",    temporal_warmstart=True)),
-        ("both",              dict(order_by="feasibility", temporal_warmstart=True)),
+        ("baseline_gs",         dict(order_by="identity",    temporal_warmstart=False,
+                                     partial_observation=False, update_pointing_on_request=False,
+                                     dynamic_prior=False)),
+        ("feasibility_order",   dict(order_by="feasibility", temporal_warmstart=False,
+                                     partial_observation=False, update_pointing_on_request=False,
+                                     dynamic_prior=False)),
+        ("warmstart",           dict(order_by="identity",    temporal_warmstart=True,
+                                     partial_observation=False, update_pointing_on_request=False,
+                                     dynamic_prior=False)),
+        ("partial_obs",         dict(order_by="identity",    temporal_warmstart=False,
+                                     partial_observation=True,  update_pointing_on_request=False,
+                                     dynamic_prior=False)),
+        ("pointing_on_req",     dict(order_by="identity",    temporal_warmstart=False,
+                                     partial_observation=False, update_pointing_on_request=True,
+                                     dynamic_prior=False)),
+        ("dynamic_prior",       dict(order_by="identity",    temporal_warmstart=False,
+                                     partial_observation=False, update_pointing_on_request=False,
+                                     dynamic_prior=True)),
+        ("all_on",              dict(order_by="feasibility", temporal_warmstart=True,
+                                     partial_observation=True,  update_pointing_on_request=True,
+                                     dynamic_prior=True)),
     ]
 
     print(f"{'variant':<22} {'req':>7} {'edges':>7} {'waste':>7} {'waste%':>7} "

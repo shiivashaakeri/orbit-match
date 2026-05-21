@@ -86,6 +86,9 @@ class KStepPredictive(PredictiveMatching):
         update_order: np.ndarray | None = None,
         order_by: Literal["identity", "feasibility"] = "identity",
         temporal_warmstart: bool = False,
+        partial_observation: bool = False,
+        update_pointing_on_request: bool = False,
+        dynamic_prior: bool = False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -116,9 +119,19 @@ class KStepPredictive(PredictiveMatching):
         self.update_order = update_order
         self.order_by = order_by
         self.temporal_warmstart = temporal_warmstart
-        # State across epochs (for temporal warm-start). The policy's other
-        # caches are invalidated at each step(); this one persists.
+        self.partial_observation = partial_observation
+        self.update_pointing_on_request = update_pointing_on_request
+        self.dynamic_prior = dynamic_prior
+
+        # State across epochs (for temporal warm-start, dynamic prior).
         self._last_realized_actions: np.ndarray | None = None
+        self._last_realized_adjacency: np.ndarray | None = None  # for dynamic prior
+
+        # Successor index of each satellite in the current sweep, populated
+        # at the top of decide() when GS+partial_observation is active.
+        # Maps satellite i to its position in the update order so that
+        # _best_response_against can tell predecessors from successors.
+        self._current_order_index: np.ndarray | None = None
 
     def decide(self, t: int) -> np.ndarray:
         """Run exactly self.k rounds of BR at epoch t."""
@@ -149,6 +162,15 @@ class KStepPredictive(PredictiveMatching):
         else:
             order = np.arange(self.n)
 
+        # For partial-observation BR, we need to know each satellite's
+        # position in the update order at evaluation time, so the BR step
+        # can distinguish committed predecessors from uncommitted successors.
+        # Populate a satellite -> order-position map. In sync mode this is
+        # unused.
+        self._current_order_index = np.empty(self.n, dtype=np.int64)
+        for pos, sat_idx in enumerate(order):
+            self._current_order_index[int(sat_idx)] = pos
+
         if self.mode == "sync":
             for _ in range(self.k):
                 a_new = np.full(self.n, NO_LINK, dtype=np.int64)
@@ -166,12 +188,18 @@ class KStepPredictive(PredictiveMatching):
     def step(self, t: int, actions: np.ndarray) -> None:
         """Update pointing, invalidate per-epoch caches, save realized actions
         for temporal warm-start."""
-        # Save the action profile *as observed* (after the mutual-choice rule
-        # eliminates failed requests). We only care about partners we actually
-        # linked with, since the warm-start uses realized matchings.
-        Policy.step(self, t, actions)
+        # Pointing update path:
+        #   default (Policy.step) updates pointing only on mutual matches.
+        #   With update_pointing_on_request=True, update pointing on every
+        #   non-NO_LINK request, so the next epoch's switching cost reflects
+        #   wherever the laser actually slewed (even on failed requests).
+        if self.update_pointing_on_request:
+            self._update_pointing_on_request(t, actions)
+        else:
+            Policy.step(self, t, actions)
+
         # Build the realized-actions profile: a_i is set iff the link (i, j)
-        # mutually formed.
+        # mutually formed. Used by temporal_warmstart and dynamic_prior.
         realized = np.full(self.n, NO_LINK, dtype=np.int64)
         for i in range(self.n):
             j = int(actions[i])
@@ -180,6 +208,17 @@ class KStepPredictive(PredictiveMatching):
             if int(actions[j]) == i:
                 realized[i] = j
         self._last_realized_actions = realized
+
+        # Build the realized adjacency matrix (symmetric) for the dynamic prior.
+        if self.dynamic_prior:
+            adj = np.zeros((self.n, self.n), dtype=np.float64)
+            for i in range(self.n):
+                j = int(realized[i])
+                if j != NO_LINK:
+                    adj[i, j] = 1.0
+                    adj[j, i] = 1.0
+            self._last_realized_adjacency = adj
+
         # Invalidate per-epoch caches.
         self._cached_baseline_epoch = -1
         self._cached_baseline_matrix = None
@@ -188,6 +227,83 @@ class KStepPredictive(PredictiveMatching):
         self._cached_value_matrix = None
         self._cached_top_partner_epoch = -1
         self._cached_top_partners = None
+        self._current_order_index = None
+
+    def _update_pointing_on_request(self, t: int, actions: np.ndarray) -> None:
+        """Update each satellite's pointing direction toward its requested
+        partner, regardless of whether the link formed.
+
+        This is idea 3: when a satellite slews its laser toward a candidate
+        $j$ during the epoch, the slew has physically happened by the time
+        the epoch ends, regardless of $j$'s response. The pointing tracker
+        should reflect that.
+
+        Satellites that played NO_LINK (varnothing) keep their previous
+        pointing direction.
+        """
+        positions_t = self.positions[t]
+        for i in range(self.n):
+            j = int(actions[i])
+            if j == NO_LINK or not (0 <= j < self.n):
+                continue
+            delta = positions_t[j] - positions_t[i]
+            norm = float(np.linalg.norm(delta))
+            if norm > 0:
+                self.pointing.directions[i] = delta / norm
+                # partners[i] reflects the *intended* partner, not necessarily
+                # the realized one. Could be confusing for downstream code;
+                # we set it conservatively only if the link formed.
+                if int(actions[j]) == i:
+                    self.pointing.partners[i] = j
+
+    def _compute_value_matrix(self, t: int) -> np.ndarray:
+        """Compute the per-epoch value matrix, optionally with a dynamic prior.
+
+        When dynamic_prior is enabled and we have a previous realized
+        adjacency, the geometric prior used in the Kirchhoff baseline is
+        re-weighted: edges that were realized in the previous epoch get
+        full weight, edges that were not realized get downweighted by a
+        small factor. This corresponds to idea 4: the prior reflects the
+        structure that the policy actually uses, not the static feasibility
+        union.
+
+        Falls back to the parent's value matrix when dynamic_prior is off
+        or no previous epoch is available.
+        """
+        if not self.dynamic_prior or self._last_realized_adjacency is None:
+            return super()._compute_value_matrix(t)
+
+        # Build a weighted prior. Edges in the previous realized adjacency
+        # get weight 1.0; other feasibility-union edges get weight 0.25.
+        # The weights are arbitrary but small enough that the prior remains
+        # a soft regularization, not a hard constraint.
+        from orbitmatch.feasibility.compute import feasibility_union  # noqa: PLC0415
+        from orbitmatch.graph.laplacian import adjacency_to_laplacian  # noqa: PLC0415
+
+        T_max = self.feasibility.shape[0]
+        full_adj = feasibility_union(self.feasibility, window_start=0, window_length=T_max).astype(np.float64)
+        # Weighted: 1.0 where realized last epoch, 0.25 elsewhere.
+        prev_adj = self._last_realized_adjacency
+        weighted_adj = np.where(prev_adj > 0, full_adj, 0.25 * full_adj)
+        weighted_prior = adjacency_to_laplacian(weighted_adj)
+
+        # Temporarily swap, call parent, swap back. The parent reads
+        # self._union_laplacian at line 231 of predictive.py.
+        original_prior = self._union_laplacian
+        self._union_laplacian = weighted_prior
+        try:
+            result = super()._compute_value_matrix(t)
+        finally:
+            self._union_laplacian = original_prior
+        return result
+        """Return a permutation sorted by ascending feasibility count.
+
+        Ties broken by satellite index for determinism. Satellites with
+        fewer feasible neighbors decide first.
+        """
+        feasibility_counts = self.feasibility[t].sum(axis=1).astype(np.int64)
+        # np.argsort is stable, so equal counts preserve index order.
+        return np.argsort(feasibility_counts, kind="stable").astype(np.int64)
 
     def _feasibility_order(self, t: int) -> np.ndarray:
         """Return a permutation sorted by ascending feasibility count.
@@ -217,24 +333,19 @@ class KStepPredictive(PredictiveMatching):
                 a[i] = int(self._cached_top_partners[i])
         return a
 
-    def step(self, t: int, actions: np.ndarray) -> None:
-        """Update pointing and invalidate caches; no deferral diagnostic."""
-        Policy.step(self, t, actions)
-        self._cached_baseline_epoch = -1
-        self._cached_baseline_matrix = None
-        self._cached_baseline_omega = None
-        self._cached_value_epoch = -1
-        self._cached_value_matrix = None
-        self._cached_top_partner_epoch = -1
-        self._cached_top_partners = None
-
     def _best_response_against(self, i: int, t: int, a: np.ndarray) -> int:
         """Best response of satellite i to the joint action a.
 
-        Same score form as the predictive policy, but with the
-        reciprocation factor read from the iterate a rather than from
-        the level-0 cache:
+        Same score form as the predictive policy. The reciprocation factor
+        p_ij is read from the iterate a:
             p_ij(a) = 1 iff a[j] == i, else 0.
+
+        If partial_observation is enabled and we are in Gauss-Seidel mode,
+        the reciprocation factor for satellites that have not yet committed
+        in this sweep (successors of i in the update order) is replaced by
+        the one-step BR predictor (top-V partner cache). Predecessors keep
+        their committed action.
+
         Tie-breaks: varnothing wins ties.
         """
         candidates = feasible_neighbors(self.feasibility, t, i)
@@ -251,12 +362,36 @@ class KStepPredictive(PredictiveMatching):
         if v_max <= 0.0:
             return NO_LINK
 
+        # Decide if partial observation is active for this evaluation.
+        use_partial = (
+            self.partial_observation
+            and self.mode == "gauss_seidel"
+            and self._current_order_index is not None
+            and self._cached_top_partners is not None
+        )
+        if use_partial:
+            i_pos = int(self._current_order_index[i])
+
         scores = np.zeros(n_candidates + 1, dtype=np.float64)
         for kk, j in enumerate(candidates):
             v_tilde = v_raw[kk] / v_max
             c_raw = self._switching_cost(i, int(j), t)
             c_tilde = c_raw / np.pi
-            p = 1.0 if int(a[int(j)]) == i else 0.0
+
+            if use_partial:
+                # If j is a predecessor (has committed earlier in this
+                # sweep), use the observed action. If j is a successor (or
+                # i itself), use the one-step BR predictor.
+                j_pos = int(self._current_order_index[int(j)])
+                if j_pos < i_pos:
+                    # Predecessor: read committed action.
+                    p = 1.0 if int(a[int(j)]) == i else 0.0
+                else:
+                    # Successor: use one-step BR predictor.
+                    p = 1.0 if int(self._cached_top_partners[int(j)]) == i else 0.0
+            else:
+                p = 1.0 if int(a[int(j)]) == i else 0.0
+
             scores[kk] = p * (v_tilde - c * c_tilde)
         # scores[-1] = 0 (varnothing).
 
