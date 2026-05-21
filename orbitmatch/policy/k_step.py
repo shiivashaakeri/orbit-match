@@ -84,6 +84,8 @@ class KStepPredictive(PredictiveMatching):
         k: int = 1,
         mode: Literal["sync", "gauss_seidel"] = "sync",
         update_order: np.ndarray | None = None,
+        order_by: Literal["identity", "feasibility"] = "identity",
+        temporal_warmstart: bool = False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -91,10 +93,17 @@ class KStepPredictive(PredictiveMatching):
             raise ValueError(f"k must be non-negative; got {k}.")
         if mode not in ("sync", "gauss_seidel"):
             raise ValueError(f"mode must be 'sync' or 'gauss_seidel'; got {mode!r}.")
+        if order_by not in ("identity", "feasibility"):
+            raise ValueError(f"order_by must be 'identity' or 'feasibility'; got {order_by!r}.")
         if update_order is not None and mode != "gauss_seidel":
             raise ValueError(
                 "update_order is only meaningful in gauss_seidel mode; "
                 "synchronous mode is order-invariant."
+            )
+        if update_order is not None and order_by != "identity":
+            raise ValueError(
+                "update_order and order_by are mutually exclusive: "
+                "specify either an explicit ordering or a sorting rule, not both."
             )
         if update_order is not None:
             update_order = np.asarray(update_order, dtype=np.int64)
@@ -104,7 +113,12 @@ class KStepPredictive(PredictiveMatching):
                 raise ValueError("update_order must be a permutation of {0, ..., n-1}")
         self.k = k
         self.mode = mode
-        self.update_order = update_order  # None means natural order (0, 1, ..., n-1)
+        self.update_order = update_order
+        self.order_by = order_by
+        self.temporal_warmstart = temporal_warmstart
+        # State across epochs (for temporal warm-start). The policy's other
+        # caches are invalidated at each step(); this one persists.
+        self._last_realized_actions: np.ndarray | None = None
 
     def decide(self, t: int) -> np.ndarray:
         """Run exactly self.k rounds of BR at epoch t."""
@@ -116,13 +130,22 @@ class KStepPredictive(PredictiveMatching):
             self._cached_top_partners = self._compute_top_value_partners(t)
             self._cached_top_partner_epoch = t
 
-        # Level-0 profile: every satellite picks its top-V partner.
-        a = self._cached_top_partners.copy()
+        # Choose the iteration starting point.
+        if self.temporal_warmstart and self._last_realized_actions is not None:
+            a = self._build_warmstart_profile(t)
+        else:
+            # Level-0 profile: every satellite picks its top-V partner.
+            a = self._cached_top_partners.copy()
 
         # Choose the iteration order for Gauss-Seidel. Synchronous is
-        # order-invariant; ignore update_order even if set.
+        # order-invariant; ignore order_by in that case.
         if self.mode == "gauss_seidel":
-            order = self.update_order if self.update_order is not None else np.arange(self.n)
+            if self.update_order is not None:
+                order = self.update_order
+            elif self.order_by == "feasibility":
+                order = self._feasibility_order(t)
+            else:
+                order = np.arange(self.n)
         else:
             order = np.arange(self.n)
 
@@ -138,6 +161,60 @@ class KStepPredictive(PredictiveMatching):
                     a[int(i)] = self._best_response_against(int(i), t, a)
 
         self._record("k_step_value", self.k)
+        return a
+
+    def step(self, t: int, actions: np.ndarray) -> None:
+        """Update pointing, invalidate per-epoch caches, save realized actions
+        for temporal warm-start."""
+        # Save the action profile *as observed* (after the mutual-choice rule
+        # eliminates failed requests). We only care about partners we actually
+        # linked with, since the warm-start uses realized matchings.
+        Policy.step(self, t, actions)
+        # Build the realized-actions profile: a_i is set iff the link (i, j)
+        # mutually formed.
+        realized = np.full(self.n, NO_LINK, dtype=np.int64)
+        for i in range(self.n):
+            j = int(actions[i])
+            if j == NO_LINK or not (0 <= j < self.n):
+                continue
+            if int(actions[j]) == i:
+                realized[i] = j
+        self._last_realized_actions = realized
+        # Invalidate per-epoch caches.
+        self._cached_baseline_epoch = -1
+        self._cached_baseline_matrix = None
+        self._cached_baseline_omega = None
+        self._cached_value_epoch = -1
+        self._cached_value_matrix = None
+        self._cached_top_partner_epoch = -1
+        self._cached_top_partners = None
+
+    def _feasibility_order(self, t: int) -> np.ndarray:
+        """Return a permutation sorted by ascending feasibility count.
+
+        Ties broken by satellite index for determinism. Satellites with
+        fewer feasible neighbors decide first.
+        """
+        feasibility_counts = self.feasibility[t].sum(axis=1).astype(np.int64)
+        # np.argsort is stable, so equal counts preserve index order.
+        return np.argsort(feasibility_counts, kind="stable").astype(np.int64)
+
+    def _build_warmstart_profile(self, t: int) -> np.ndarray:
+        """Initialize action profile from the last realized matching.
+
+        Entries that are NO_LINK in the previous matching, or that are now
+        infeasible, fall back to the top-V partner from the cached level-0
+        profile.
+        """
+        assert self._last_realized_actions is not None
+        assert self._cached_top_partners is not None
+        a = self._last_realized_actions.copy()
+        for i in range(self.n):
+            j = int(a[i])
+            # Fall back to top-V if no previous link or the previous partner
+            # is no longer feasible.
+            if j == NO_LINK or not bool(self.feasibility[t, i, j]):
+                a[i] = int(self._cached_top_partners[i])
         return a
 
     def step(self, t: int, actions: np.ndarray) -> None:
