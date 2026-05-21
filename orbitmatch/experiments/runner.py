@@ -55,6 +55,7 @@ from orbitmatch.graph.windowed import WindowedLaplacian, WindowedUnion
 from orbitmatch.policy.base import Policy, PolicyParams
 from orbitmatch.policy.baselines import GreedyMatching, RandomMatching
 from orbitmatch.policy.equilibrium import EquilibriumMatching
+from orbitmatch.policy.k_step import KStepPredictive
 from orbitmatch.policy.predictive import PredictiveMatching
 from orbitmatch.utils.logging_setup import get_logger
 from orbitmatch.utils.seeding import make_rng
@@ -73,6 +74,7 @@ _POLICY_REGISTRY: dict[str, type[Policy]] = {
     "greedy": GreedyMatching,
     "random": RandomMatching,
     "equilibrium": EquilibriumMatching,
+    "k_step": KStepPredictive,
 }
 
 
@@ -278,7 +280,9 @@ def run_simulation(
 
     # ---- 6. Diagnostics ----------------------------------------------------
     diag_dict = policy.diagnostics()
-    policy_diagnostics: dict[str, np.ndarray] = {k: np.asarray(v) for k, v in diag_dict.items()}
+    policy_diagnostics: dict[str, np.ndarray] = {
+        k: np.asarray(v) for k, v in diag_dict.items()
+    }
 
     # ---- 7. Pack ------------------------------------------------------------
     metadata = {
