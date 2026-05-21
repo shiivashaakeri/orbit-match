@@ -11,6 +11,85 @@ Format:
 
 ---
 
+## 2026-05-20 — k1_gs validation: seed robustness + ordering sensitivity
+
+- **Branch/commit:** main / current
+- **Ran by:** Shiva (local laptop)
+- **Script:** `scripts/validate_k1_gs.py`
+
+### Question
+
+The k-ablation showed `k1_gs` (k=1 Gauss-Seidel BR from level-0) is the
+densest, zero-waste policy on medium config, beating equilibrium on
+edges-per-epoch. Before reframing the paper around this finding, two
+validations:
+
+A. Robust across seeds?
+B. Robust across satellite update orderings?
+
+### Setup
+
+Medium Walker, 2 orbital periods (1148 epochs), T=574, H=10, c=0.2,
+eps=0.01. Six runs total, each ~64 s wall-clock.
+
+### Results
+
+Validation A (seeds {42, 43, 44}, identity ordering):
+
+```
+seed=42   req/ep 37.12   edges/ep 18.56   waste 0.0%   rho_mean 0.9988   rho_cover 0.9902
+seed=43   req/ep 37.12   edges/ep 18.56   waste 0.0%   rho_mean 0.9988   rho_cover 0.9902
+seed=44   req/ep 37.12   edges/ep 18.56   waste 0.0%   rho_mean 0.9988   rho_cover 0.9902
+
+  edges/ep spread: 0.0000  rho_cover spread: 0.0000
+```
+
+Validation B (seed=42, three orderings):
+
+```
+identity    req/ep 37.12   edges/ep 18.56   rho_mean 0.9988   rho_cover 0.9902
+reversed    req/ep 35.73   edges/ep 17.86   rho_mean 0.9994   rho_cover 0.9882
+random_p7   req/ep 37.42   edges/ep 18.71   rho_mean 0.9998   rho_cover 0.9863
+
+  edges/ep spread: 0.8441  rho_cover spread: 0.0039
+```
+
+### Outcomes
+
+**Validation A: perfect.** k1_gs is fully deterministic given the
+geometry. Seeds only matter for the random tie-break in
+`_argmax_with_varnothing_preference`, which never fires here (scores
+are distinct floats). The finding is deterministic, not statistical.
+
+**Validation B: meaningful but small.** Different orderings yield
+*different* NEs of $\Gamma_t$, but all are excellent (0% waste, very
+high rho_mean). The spread is ~5% in edges/ep and 0.4% in rho_cover.
+Random and reversed orderings slightly beat identity on rho_mean,
+slightly lose on rho_cover. **The phenomenon: GS-from-level-0 has
+multiple basins of attraction; ordering picks which one.**
+
+**Verdict: finding holds.** k1_gs (Gauss-Seidel, from level-0, one
+sweep) is the recommended deployable policy. Even the worst-ordering
+NE (reversed: 17.86 edges/ep) beats equilibrium (16.46 edges/ep,
+warm-started from level-1).
+
+### Implications
+
+- See FINDINGS F11 (k1_gs reaches NE in one sweep), F12 (different
+  orderings yield different NEs), F13 (equilibrium is a *worse* NE),
+  and F14 (adaptive interpretation revised).
+- Reframe Fig 1 around: predictive (k1_sync), k1_gs, greedy, random.
+  Drop or demote equilibrium per F13.
+- Reframe Fig 3 around the *update-order axis* (sync vs GS at k=1)
+  rather than the depth axis. Add a remark about NE multiplicity.
+
+### Artifacts
+
+- `results/k_gs_validation/trace_k1_gs_seed{42,43,44}_identity.npz`
+- `results/k_gs_validation/trace_k1_gs_seed42_{identity,reversed,random_p7}.npz`
+
+---
+
 ## 2026-05-20 — k-ablation, first run, synchronous BR + initial adaptive
 
 - **Branch/commit:** main / current
