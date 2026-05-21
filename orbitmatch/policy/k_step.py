@@ -83,6 +83,7 @@ class KStepPredictive(PredictiveMatching):
         *args,
         k: int = 1,
         mode: Literal["sync", "gauss_seidel"] = "sync",
+        update_order: np.ndarray | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -90,8 +91,20 @@ class KStepPredictive(PredictiveMatching):
             raise ValueError(f"k must be non-negative; got {k}.")
         if mode not in ("sync", "gauss_seidel"):
             raise ValueError(f"mode must be 'sync' or 'gauss_seidel'; got {mode!r}.")
+        if update_order is not None and mode != "gauss_seidel":
+            raise ValueError(
+                "update_order is only meaningful in gauss_seidel mode; "
+                "synchronous mode is order-invariant."
+            )
+        if update_order is not None:
+            update_order = np.asarray(update_order, dtype=np.int64)
+            if update_order.shape != (self.n,):
+                raise ValueError(f"update_order must have shape ({self.n},); got {update_order.shape}")
+            if set(update_order.tolist()) != set(range(self.n)):
+                raise ValueError("update_order must be a permutation of {0, ..., n-1}")
         self.k = k
         self.mode = mode
+        self.update_order = update_order  # None means natural order (0, 1, ..., n-1)
 
     def decide(self, t: int) -> np.ndarray:
         """Run exactly self.k rounds of BR at epoch t."""
@@ -106,6 +119,13 @@ class KStepPredictive(PredictiveMatching):
         # Level-0 profile: every satellite picks its top-V partner.
         a = self._cached_top_partners.copy()
 
+        # Choose the iteration order for Gauss-Seidel. Synchronous is
+        # order-invariant; ignore update_order even if set.
+        if self.mode == "gauss_seidel":
+            order = self.update_order if self.update_order is not None else np.arange(self.n)
+        else:
+            order = np.arange(self.n)
+
         if self.mode == "sync":
             for _ in range(self.k):
                 a_new = np.full(self.n, NO_LINK, dtype=np.int64)
@@ -114,8 +134,8 @@ class KStepPredictive(PredictiveMatching):
                 a = a_new
         else:  # gauss_seidel
             for _ in range(self.k):
-                for i in range(self.n):
-                    a[i] = self._best_response_against(i, t, a)
+                for i in order:
+                    a[int(i)] = self._best_response_against(int(i), t, a)
 
         self._record("k_step_value", self.k)
         return a
