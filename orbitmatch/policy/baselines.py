@@ -44,6 +44,8 @@ confounding variable, isolating the picking question).
 
 from __future__ import annotations
 
+import numpy as np
+
 from orbitmatch.feasibility.compute import feasible_neighbors
 from orbitmatch.policy.base import NO_LINK, Policy
 from orbitmatch.policy.predictive import PredictiveMatching
@@ -73,13 +75,37 @@ class GreedyMatching(PredictiveMatching):
     the Kirchhoff value function with the geometric prior, the
     per-satellite normalization, the switching cost, the per-epoch
     value-matrix cache, and the varnothing-preferring tie-break.
+
+    The :meth:`step` method is overridden to skip the predictive-policy
+    deferral diagnostic, which has no meaningful interpretation under
+    Greedy (the policy never defers; deferrals would just be artifacts
+    of the mutual-choice rule failing to match).
     """
 
     name: str = "greedy"
 
-    def _reciprocation_prob(self, i: int, j: int, t: int) -> float:  # noqa: ARG002
+    def _reciprocation_prob(self, i: int, j: int, t: int) -> float:
         """Always 1: greedy does not predict reciprocation."""
         return 1.0
+
+    def step(self, t: int, actions: np.ndarray) -> None:
+        """Update pointing state and invalidate caches, without recording deferrals.
+
+        Mirrors :meth:`PredictiveMatching.step` minus the deferral
+        diagnostic. The cache invalidation must still happen because
+        the value matrix is per-epoch.
+        """
+        # Update pointing state via the abstract Policy.step (skipping
+        # PredictiveMatching.step entirely so the deferrals diagnostic
+        # is not recorded).
+        Policy.step(self, t, actions)
+
+        # Invalidate per-epoch caches for the next epoch.
+        self._cached_baseline_epoch = -1
+        self._cached_baseline_matrix = None
+        self._cached_baseline_omega = None
+        self._cached_value_epoch = -1
+        self._cached_value_matrix = None
 
 
 # ---------------------------------------------------------------------------
