@@ -1,0 +1,26 @@
+# orbit-match/configs/sweep_T.yaml
+#
+# Saturation ablation: rho_realized vs. certificate window T.
+# Tests the empirical observation that rho reaches 1 exactly at
+# T = T_orb (~573 epochs) and degrades for shorter windows.
+#
+# Runs on the small config (fast). Single policy (predictive) since the
+# question is about how the certificate window scales the empirical
+# rho, not about policy comparison.
+#
+# T grid is in epochs (not seconds, not multiples of orbital period).
+# The largest value 573 corresponds to ceil(T_orb / dt_s) at 550 km,
+# 53 deg, dt = 10 s -- i.e. one full orbital period.
+
+base:
+  constellation: constellation_small.yaml
+  policy: policy_default.yaml
+  policy_name: predictive
+  simulation:
+    duration_periods: 3.0
+    dt_s: 10.0
+    seeds: [42, 43, 44, 45, 46]
+    # T is overridden by the sweep; no `T:` here.
+
+sweep:
+  T: [60, 90, 120, 180, 240, 360, 480, 573]

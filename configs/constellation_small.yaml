@@ -1,0 +1,28 @@
+# orbit-match/configs/constellation_small.yaml
+#
+# Small Walker-Delta constellation used for fast ablations and the small-n
+# end of the scaling sweep. Brute-force comparisons (e.g. centralized
+# matching) remain tractable at n = 24.
+#
+# Schema
+# ------
+# `walker:`      maps 1:1 to orbitmatch.constellation.walker_delta.WalkerDeltaConfig.
+# `feasibility:` maps 1:1 to orbitmatch.feasibility.predicates.FeasibilityParams.
+#                Note: `rate_max_rad_per_s` is given in deg/s here as
+#                `rate_max_deg_per_s` for readability; the loader converts.
+# `label:`       short identifier used by the feasibility cache filename.
+
+label: small
+
+walker:
+  M: 24
+  P: 4
+  F: 1
+  altitude_km: 550.0
+  inclination_deg: 53.0
+  name: small
+
+feasibility:
+  atm_buffer_km: 80.0
+  range_max_km: 8000.0
+  rate_max_deg_per_s: 1.0

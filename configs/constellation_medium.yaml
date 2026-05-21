@@ -1,0 +1,23 @@
+# orbit-match/configs/constellation_medium.yaml
+#
+# Medium Walker-Delta constellation. This is the headline configuration for
+# the paper: Plot 1 (lambda_2 traces), Plot 4 (robustness) run here.
+#
+# At n = 60 the feasibility tensor is the largest object held in memory
+# (~150 MB intermediate, cached after first run via
+# orbitmatch.feasibility.compute.load_or_compute_feasibility).
+
+label: medium
+
+walker:
+  M: 60
+  P: 6
+  F: 2
+  altitude_km: 550.0
+  inclination_deg: 53.0
+  name: medium
+
+feasibility:
+  atm_buffer_km: 80.0
+  range_max_km: 8000.0
+  rate_max_deg_per_s: 1.0

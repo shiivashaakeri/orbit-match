@@ -1,0 +1,39 @@
+# orbit-match/configs/sweep_scaling.yaml
+#
+# Plot 3: rho_realized vs. number of satellites n.
+# Two policies (predictive, greedy) at each n.
+#
+# Schema
+# ------
+# Unlike the H and T sweeps, this one varies the constellation itself,
+# not a policy parameter. Each entry in `constellations:` is a complete
+# Walker-Delta spec inline (the runner builds a temporary
+# WalkerDeltaConfig from each entry, rather than loading a YAML file).
+# Feasibility thresholds are shared and given in the top-level
+# `feasibility:` block.
+#
+# For each n the runner sets T = ceil(T_orb_s / dt_s), which is the same
+# 573 epochs for all entries because altitude is constant.
+
+policy: policy_default.yaml
+
+policies:
+  - predictive
+  - greedy
+
+constellations:
+  - {M: 12, P: 2, F: 1, altitude_km: 550.0, inclination_deg: 53.0, name: n12, label: n12}
+  - {M: 24, P: 4, F: 1, altitude_km: 550.0, inclination_deg: 53.0, name: n24, label: n24}
+  - {M: 48, P: 6, F: 2, altitude_km: 550.0, inclination_deg: 53.0, name: n48, label: n48}
+  - {M: 96, P: 8, F: 3, altitude_km: 550.0, inclination_deg: 53.0, name: n96, label: n96}
+
+feasibility:
+  atm_buffer_km: 80.0
+  range_max_km: 8000.0
+  rate_max_deg_per_s: 1.0
+
+simulation:
+  duration_periods: 3.0
+  dt_s: 10.0
+  T: orbital_period
+  seeds: [42, 43, 44]

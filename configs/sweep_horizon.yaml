@@ -1,0 +1,27 @@
+# orbit-match/configs/sweep_horizon.yaml
+#
+# Plot 2: time-averaged lambda_2 vs. lookahead horizon H.
+# Runs on the small config (fast); T fixed at orbital_period so the
+# certificate window is held constant across the sweep.
+#
+# Schema
+# ------
+# `base:`     a fully-specified experiment block (same shape as
+#             experiment_main.yaml minus the `policies:` list, since
+#             the sweep itself fixes which policy is being ablated).
+# `sweep:`    map of parameter-name -> list of values. The runner
+#             produces the Cartesian product of all sweep entries with
+#             the seeds and runs each combination.
+
+base:
+  constellation: constellation_small.yaml
+  policy: policy_default.yaml
+  policy_name: predictive
+  simulation:
+    duration_periods: 3.0
+    dt_s: 10.0
+    T: orbital_period
+    seeds: [42, 43, 44, 45, 46]
+
+sweep:
+  H: [1, 5, 10, 20, 50]

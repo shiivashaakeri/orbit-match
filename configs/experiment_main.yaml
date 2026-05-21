@@ -1,0 +1,40 @@
+# orbit-match/configs/experiment_main.yaml
+#
+# Composition for the headline paper experiment (Plot 1: lambda_2 traces
+# on the medium config, all four policies).
+#
+# Schema
+# ------
+# `constellation:` path (relative to configs/) of a constellation config.
+# `policy:`        path (relative to configs/) of a policy config; the
+#                  runner ignores its `name:` field and instead iterates
+#                  over `policies:` below.
+# `policies:`      list of policy names to run end-to-end. Each is
+#                  constructed with the hyperparameters from `policy:`
+#                  (so H, c, epsilon are shared); only the class differs.
+# `simulation:`
+#   duration_periods:  total simulation length in orbital periods.
+#                      The runner uses
+#                      n_epochs = ceil(duration_periods * T_orb_s / dt_s).
+#   dt_s:              epoch length in seconds.
+#   T:                 certificate window length. The string
+#                      "orbital_period" is a sentinel: the loader replaces
+#                      it with ceil(T_orb_s / dt_s) for the chosen
+#                      constellation (573 epochs at 550 km, 53 deg).
+#   seeds:             list of integer seeds; the runner executes one
+#                      replicate per seed.
+
+constellation: constellation_medium.yaml
+policy: policy_default.yaml
+
+policies:
+  - predictive
+  - greedy
+  - random
+  - equilibrium
+
+simulation:
+  duration_periods: 3.0
+  dt_s: 10.0
+  T: orbital_period
+  seeds: [42, 43, 44]

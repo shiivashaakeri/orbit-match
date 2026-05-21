@@ -1,0 +1,25 @@
+# orbit-match/configs/policy_default.yaml
+#
+# Default hyperparameters for the predictive matching policy of Sec III.
+#
+# Schema
+# ------
+# `policy:`  maps 1:1 to orbitmatch.policy.base.PolicyParams.
+#            EXCEPT the `T` (certificate window) field, which is set per
+#            experiment (see experiment_main.yaml) and is therefore NOT
+#            specified here. The library default T = 30 in PolicyParams
+#            is a unit-test fallback, not the experimental setting.
+#
+# `name:`    one of {"predictive", "greedy", "random", "equilibrium"}.
+#            The runner selects the corresponding class.
+#
+# Values below match the defaults in NOTATION.md and PROJECT_PLAN.md.
+
+name: predictive
+
+policy:
+  H: 10
+  switching_cost_scale: 0.2
+  epsilon_geometric_prior: 0.01
+  tie_break: lowest_index
+  seed: null
