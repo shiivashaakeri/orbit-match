@@ -84,7 +84,7 @@ class GreedyMatching(PredictiveMatching):
 
     name: str = "greedy"
 
-    def _reciprocation_prob(self, i: int, j: int, t: int) -> float:
+    def _reciprocation_prob(self, i: int, j: int, t: int) -> float:  # noqa: ARG002
         """Always 1: greedy does not predict reciprocation."""
         return 1.0
 
