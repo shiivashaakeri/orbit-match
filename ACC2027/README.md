@@ -58,20 +58,26 @@ results/             # per-run outputs (timestamped)
 
 ## The game policy (what `game.py` does)
 
-For each terminal, satellite *i* picks the feasible neighbor *j* maximizing
+Per terminal, satellite *i* ranks each feasible neighbor *j* by
 
 ```
-u_i(j) = log(1 + R_ij) − α · angle(θ_prev, θ_ij)
+score_i(j) = log(1 + R_ij) − α · angle(θ_prev, θ_ij)
 ```
 
-where `R_ij` is the effective resistance between *i* and *j* in the
-**windowed-union** graph `G^cup(t;T)` measured **before** the link is added (the
-exact marginal of log #spanning-trees), and the second term is the slewing cost
-of repointing the terminal. A link `(i, j)` is realized only on **mutual choice**
-(*i* points at *j* and *j* points back at *i*), which caps realized degree at 4,
-matching the hardware budget and the baselines. Best response is evaluated
-synchronously against a fixed `G^cup`, so the round is order-independent.
+where `R_ij` is the effective resistance between *i* and *j* estimated **locally**
+on the union of *i*'s and *j*'s `est_radius`-hop neighborhoods in the
+**windowed-union** graph `G^cup(t;T)`, measured **before** the link is added (the
+exact marginal of log #spanning-trees); the second term is the slewing cost of
+repointing the terminal.
 
-> This is the corrected policy. The original notebook had a dead slewing term,
-> read resistance after adding the edge, formed links unilaterally (degree could
-> exceed 4), and optimized the per-epoch snapshot instead of the windowed union.
+Links are then realized by a **stable matching** (deferred acceptance) over the
+terminal direction-pairs (front↔behind, left↔right). Matching enforces the
+**mutual-choice** rule directly and avoids the wasted-terminal reciprocation
+failure of a one-shot pick, while the per-direction structure caps realized
+degree at 4 — matching the hardware budget and the baselines. This is the
+"matching game" of the project writeups.
+
+> The original notebook had a dead slewing term, read resistance after adding the
+> edge, formed links unilaterally (degree could exceed 4), and optimized the
+> per-epoch snapshot. The corrected policy fixes all four and realizes links by
+> matching rather than an optimistic one-shot selection.
