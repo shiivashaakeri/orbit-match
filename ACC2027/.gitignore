@@ -1,0 +1,7 @@
+# Run outputs (keep the dir, ignore the contents)
+results/*
+!results/.gitkeep
+
+# Python
+__pycache__/
+*.pyc

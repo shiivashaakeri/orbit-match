@@ -1,0 +1,14 @@
+# Core scientific stack
+numpy>=1.24
+scipy>=1.10          # required by networkx for resistance_distance / laplacian
+
+# Graph algorithms (algebraic connectivity, effective resistance, ego graphs)
+networkx>=3.0
+
+# Orbital propagation
+sgp4>=2.20
+skyfield>=1.45
+
+# Plotting and progress bars
+matplotlib>=3.6
+tqdm>=4.60
