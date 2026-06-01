@@ -1,13 +1,85 @@
-"""The potential-game best-response link-formation policy.
+"""Predictive ISL link formation as a matching game.
 
-This is the corrected ``game_theory_formation`` (see the project history for the
-four bugs fixed: dead slewing cost, post-edge resistance, missing mutual-choice
-/ degree cap, and snapshot-vs-windowed-union objective). Kept identical to the
-notebook's cell 2 so the module and notebook never diverge.
+This implements the policy described in the project writeups: at each epoch every
+satellite scores its feasible neighbors by the single-edge marginal of
+``log tau`` minus a slewing cost, and links are realized by a **stable matching**
+(deferred acceptance) rather than a one-shot optimistic pick. Matching directly
+realizes the mutual-choice rule and avoids the wasted-terminal reciprocation
+failure of a single synchronous round.
+
+Per terminal, satellite ``i`` ranks candidate ``j`` by
+
+    score_i(j) = log(1 + R_ij) - alpha * angle(theta_i^prev, theta_ij),
+
+where ``R_ij`` is the effective resistance between ``i`` and ``j`` estimated
+locally on the union of ``i``'s and ``j``'s h-hop neighborhoods in the windowed
+union graph ``G_union`` (measured BEFORE the edge is added -- the exact marginal
+of log #spanning-trees). Terminals pair up by direction (front<->behind,
+left<->right); each is a stable matching, so realized degree never exceeds 4.
 """
+
+from __future__ import annotations
+
+from collections import deque
 
 import networkx as nx
 import numpy as np
+
+_DIRECTIONS = ["front", "behind", "left", "right"]
+_OPPOSITE = {"front": "behind", "behind": "front", "left": "right", "right": "left"}
+# The two independent matchings: (proposer direction, receiver direction).
+_DIRECTION_PAIRS = [("front", "behind"), ("left", "right")]
+
+
+def _slew_fraction(angle_prev, cand_angle):
+    """Normalized angular repointing distance in [0, 1] (0 if no prior pointing)."""
+    if angle_prev is None:
+        return 0.0
+    diff = abs(cand_angle - angle_prev)
+    diff = min(diff, 360.0 - diff)
+    return diff / 180.0
+
+
+def _gale_shapley(proposer_pref, receiver_score):
+    """Deferred-acceptance stable matching (capacity 1 on both sides).
+
+    Parameters
+    ----------
+    proposer_pref : dict[int, list[int]]
+        proposer -> receivers in descending preference order.
+    receiver_score : callable(receiver, proposer) -> comparable
+        Higher is better; used by each receiver to compare its suitors.
+
+    Returns
+    -------
+    dict[int, int]
+        receiver -> matched proposer.
+    """
+    held = {}        # receiver -> proposer
+    held_score = {}  # receiver -> score of held proposer
+    nxt = {p: 0 for p in proposer_pref}
+    free = deque(p for p in proposer_pref if proposer_pref[p])
+
+    while free:
+        p = free.popleft()
+        prefs = proposer_pref[p]
+        while nxt[p] < len(prefs):
+            r = prefs[nxt[p]]
+            nxt[p] += 1
+            sc = receiver_score(r, p)
+            if r not in held:
+                held[r] = p
+                held_score[r] = sc
+                break
+            if sc > held_score[r]:
+                bumped = held[r]
+                held[r] = p
+                held_score[r] = sc
+                if nxt[bumped] < len(proposer_pref[bumped]):
+                    free.append(bumped)
+                break
+            # else: rejected, try next preference
+    return held
 
 
 def game_theory_formation(
@@ -22,43 +94,27 @@ def game_theory_formation(
     G_union=None,
     alpha=0.5,
     bridge_bonus=1e3,
+    est_radius=3,
 ):
-    """
-    Distributed ISL topology formation as one synchronous round of
-    best-response in the potential game.
-
-    For each of its four terminals (front/behind/left/right) satellite ``i``
-    independently picks the feasible neighbor ``j`` maximizing the utility
-
-        u_i(j) = log(1 + R_ij) - alpha * angle(theta_prev, theta_ij),
-
-    where ``R_ij`` is the effective resistance between ``i`` and ``j`` measured
-    in the windowed-union graph ``G_union`` BEFORE the link is added -- i.e. the
-    exact marginal of log(number of spanning trees) -- and the angular term is
-    the slewing cost of repointing the terminal from its previous target.
-
-    A link ``(i, j)`` is realized only on MUTUAL choice: ``i`` points a terminal
-    at ``j`` and ``j`` points the opposite terminal back at ``i``. Each satellite
-    commits at most one target per terminal, so realized degree never exceeds 4,
-    matching the hardware budget and the baselines.
+    """Form one epoch's ISL topology as a stable matching game.
 
     Parameters
     ----------
     G : nx.Graph
         Empty graph on the N satellite nodes; populated and returned.
     G_prev : nx.Graph or None
-        Previous epoch's realized graph, used for the slewing cost. None at t=0.
+        Previous epoch's realized graph (for slewing cost). None at t=0.
     G_union : nx.Graph or None
-        Windowed union graph G^cup(t; T) of past realized epochs, used as the
-        connectivity context for the marginal R_ij. None/empty at t=0, in which
-        case every candidate bridges two components.
+        Windowed union graph G^cup(t; T); connectivity context for the marginal.
+        None/empty at t=0, so every candidate bridges two components.
     alpha : float
         Slewing-cost weight.
     bridge_bonus : float
-        Finite utility for a candidate that bridges two components (i and j not
-        connected within radius 3 of G_union). Large enough to dominate any
-        in-component marginal, yet finite so the slewing cost still breaks ties
-        among bridging candidates.
+        Finite score for a pair the local estimate cannot connect (different
+        components of the local subgraph) -- large enough to dominate any
+        in-component marginal, finite so slewing/proximity break ties.
+    est_radius : int
+        Hop radius of each satellite's local neighborhood used to estimate R_ij.
     """
     num_satellites = len(positions)
 
@@ -68,100 +124,92 @@ def game_theory_formation(
         "left": fov_matrix_left,
         "right": fov_matrix_right,
     }
-    opposite_map = {
-        "front": "behind",
-        "behind": "front",
-        "left": "right",
-        "right": "left",
-    }
-    directions = ["front", "behind", "left", "right"]
 
     # --- Feasible, mutually visible candidates per (satellite, direction) ---
-    candidates = {i: {d: [] for d in directions} for i in range(num_satellites)}
+    candidates = {i: {d: [] for d in _DIRECTIONS} for i in range(num_satellites)}
     for i in range(num_satellites):
-        for direction in directions:
+        for direction in _DIRECTIONS:
             fov = fov_map[direction]
-            fov_opposite = fov_map[opposite_map[direction]]
+            fov_opposite = fov_map[_OPPOSITE[direction]]
             for j in range(num_satellites):
                 if (i != j) and (fov[i, j] == 1) and (fov_opposite[j, i] == 1):
                     candidates[i][direction].append(j)
 
-    # Connectivity context for the marginal: windowed union of past epochs.
     if G_union is None:
         G_union = nx.Graph()
         G_union.add_nodes_from(range(num_satellites))
 
-    # --- Phase 1: simultaneous best response against the FIXED G_union ---
-    # desired[i][direction] = preferred target j*, or None.
-    desired = {i: {d: None for d in directions} for i in range(num_satellites)}
-
-    for i in range(num_satellites):
-        if not any(candidates[i][d] for d in directions):
-            continue
-
-        # Radius-3 ego view of i in the union graph. It depends on i only, so
-        # compute it once and reuse it across all four terminals.
-        G_sub = nx.ego_graph(G_union, i, radius=3, undirected=True)
-
-        for direction in directions:
-            target_list = candidates[i][direction]
-            if not target_list:
+    # --- Current terminal pointing per (satellite, direction), from G_prev ---
+    # angle_prev[(i, direction)] = bearing of last epoch's neighbor in that
+    # direction (None if none). The per-endpoint "dir" dict disambiguates the
+    # undirected edge.
+    angle_prev = {}
+    if G_prev is not None:
+        for i in range(num_satellites):
+            if not G_prev.has_node(i):
                 continue
+            for nbr in G_prev.neighbors(i):
+                edge_dir = G_prev[i][nbr].get("dir", {})
+                d = edge_dir.get(i)
+                if d is not None:
+                    angle_prev[(i, d)] = relative_positions[i, nbr, 1]
 
-            # Current pointing of this terminal = bearing of the neighbor it
-            # tracked last epoch in this direction (None if none / t=0). The
-            # per-endpoint "dir" dict avoids the undirected-edge ambiguity.
-            current_angle = None
-            if G_prev is not None and G_prev.has_node(i):
-                for nbr in G_prev.neighbors(i):
-                    edge_dir = G_prev[i][nbr].get("dir", {})
-                    if edge_dir.get(i) == direction:
-                        current_angle = relative_positions[i, nbr, 1]
-                        break
+    # --- Local effective-resistance estimate (cached per unordered pair) ---
+    ego_cache = {}
+    marginal_cache = {}
 
-            best_score, best_target, best_dist = -np.inf, None, np.inf
-            for j in target_list:
-                # Slewing cost: shortest angular repointing distance.
-                slew = 0.0
-                if current_angle is not None:
-                    cand_angle = relative_positions[i, j, 1]
-                    diff = abs(cand_angle - current_angle)
-                    diff = min(diff, 360.0 - diff)
-                    slew = alpha * (diff / 180.0)
+    def ego(i):
+        s = ego_cache.get(i)
+        if s is None:
+            s = set(nx.ego_graph(G_union, i, radius=est_radius, undirected=True))
+            ego_cache[i] = s
+        return s
 
-                # Marginal of log(tau): log(1 + R_ij) with R_ij measured in the
-                # union graph BEFORE adding (i, j). j in G_sub implies i and j
-                # are already connected within radius 3.
-                if j in G_sub:
-                    R_ij = nx.resistance_distance(G_sub, i, j)
-                    marginal = np.log1p(R_ij)
-                else:
-                    marginal = bridge_bonus  # (i, j) bridges two components
+    def marginal(i, j):
+        """log(1 + R_ij) on the union of i's and j's neighborhoods; bridge bonus
+        if the local view cannot connect them."""
+        key = (i, j) if i < j else (j, i)
+        val = marginal_cache.get(key)
+        if val is not None:
+            return val
+        H = G_union.subgraph(ego(i) | ego(j))
+        comp = nx.node_connected_component(H, i)
+        if j in comp:
+            Hc = H.subgraph(comp).copy()
+            val = float(np.log1p(nx.resistance_distance(Hc, i, j)))
+        else:
+            val = bridge_bonus  # pair bridges two (locally visible) components
+        marginal_cache[key] = val
+        return val
 
-                utility = marginal - slew
-                # The locked utility is silent on ties (e.g. at t=0 every
-                # candidate bridges with no slew, so all utilities are equal).
-                # Resolve them deterministically by physical proximity -- the
-                # closer satellite is cheaper to acquire/track -- rather than by
-                # the meaningless node-index order of a plain `>` comparison.
-                dist_ij = relative_positions[i, j, 0]
-                if (utility > best_score + 1e-12) or (
-                    abs(utility - best_score) <= 1e-12 and dist_ij < best_dist
-                ):
-                    best_score, best_target, best_dist = utility, j, dist_ij
-
-            desired[i][direction] = best_target
-
-    # --- Phase 2: realize links only on mutual choice (degree <= 4 per side) ---
-    for i in range(num_satellites):
-        for direction in directions:
-            j = desired[i][direction]
-            if j is None:
+    # --- Two stable matchings: front<->behind and left<->right ---
+    for pdir, rdir in _DIRECTION_PAIRS:
+        # Proposer preference lists (best first); tie-break by proximity.
+        proposer_pref = {}
+        for i in range(num_satellites):
+            cand = candidates[i][pdir]
+            if not cand:
                 continue
-            opp = opposite_map[direction]
-            if desired[j][opp] == i:
-                # Record each endpoint's terminal so next epoch's slewing
-                # lookup is unambiguous on the undirected edge.
-                G.add_edge(i, j, dir={i: direction, j: opp})
+            a_prev = angle_prev.get((i, pdir))
+
+            def p_key(j, i=i, a_prev=a_prev):
+                score = marginal(i, j) - alpha * _slew_fraction(
+                    a_prev, relative_positions[i, j, 1]
+                )
+                return (score, -relative_positions[i, j, 0])
+
+            proposer_pref[i] = sorted(cand, key=p_key, reverse=True)
+
+        # Receiver scoring: receiver r ranks suitor p by its own utility.
+        def receiver_score(r, p):
+            a_prev = angle_prev.get((r, rdir))
+            score = marginal(p, r) - alpha * _slew_fraction(
+                a_prev, relative_positions[r, p, 1]
+            )
+            return (score, -relative_positions[r, p, 0])
+
+        matched = _gale_shapley(proposer_pref, receiver_score)
+        for r, p in matched.items():
+            G.add_edge(p, r, dir={p: pdir, r: rdir})
 
     return G
