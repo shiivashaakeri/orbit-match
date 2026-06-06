@@ -16,14 +16,14 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 
+from satgame.graph import union_series
 from satgame.metrics import logtau
 
 # Consistent per-method styling.
 _STYLE = {
-    "game":     ("Game Theory", "#2563eb", "o", "-"),
-    "furthest": ("Furthest",    "#dc2626", "s", "--"),
-    "greedy":   ("Greedy",      "#d97706", "^", "-."),
-    "mdmd":     ("MDMD",        "#7c3aed", "D", ":"),
+    "game":        ("Game Theory", "#2563eb", "o", "-"),
+    "furthest":    ("Furthest",    "#dc2626", "s", "--"),
+    "centralized": ("Centralized", "#059669", "D", "-"),
 }
 
 
@@ -80,41 +80,38 @@ def plot_comparison(metrics_by_method, out_path):
     return out_path
 
 
-def plot_union_lambda2(graphs, out_path):
-    """Cumulative-union connectivity analysis for one method (typically the game).
+def plot_union_lambda2(graphs, out_path, window):
+    """Windowed-union connectivity analysis for one method (typically the game).
 
-    Two panels: λ₂ of the cumulative union (G_0 ∪ … ∪ G_t) and log τ of the
-    cumulative union -- the quantity the game policy actually optimizes. The raw
+    Two panels: λ₂ and log τ of the windowed union G^cup(t; T) -- the exact graph
+    and objective the policy optimizes (log τ is what the game maximizes). The raw
     per-snapshot (single-epoch) curves are intentionally omitted: a single epoch
     is sparse/disconnected and not what the game optimizes.
 
-    ``graphs`` is one method's list of per-epoch graphs.
+    ``graphs`` is one method's list of per-epoch graphs; ``window`` is the horizon
+    T. (For runs with fewer epochs than ``window`` the windowed union spans all
+    epochs, coinciding with the cumulative union.)
     """
-    cumulative = []
-    cumulative_logtau = []
-    union = graphs[0].copy()
-    for i, G in enumerate(graphs):
-        if i > 0:
-            union.add_edges_from(G.edges())
-        cumulative.append(nx.algebraic_connectivity(union))
-        cumulative_logtau.append(logtau(union))
+    series = union_series(graphs, window)
+    lam2 = [nx.algebraic_connectivity(U) for U in series]
+    lam2_logtau = [logtau(U) for U in series]
 
     t = np.arange(len(graphs))
     fig, axes = plt.subplots(2, 1, figsize=(12, 8))
-    fig.suptitle("Cumulative-Union Connectivity Over Time",
+    fig.suptitle(f"Windowed-Union Connectivity Over Time (T = {window})",
                  fontsize=14, fontweight="bold")
 
-    axes[0].plot(t, cumulative, color="darkorange", linewidth=2,
-                 marker="o", markersize=3, label="λ₂ of cumulative union")
-    axes[0].set_title("λ₂ of Cumulative Graph Union (G₀ ∪ G₁ ∪ … ∪ Gₜ)")
+    axes[0].plot(t, lam2, color="darkorange", linewidth=2,
+                 marker="o", markersize=3, label="λ₂ of windowed union")
+    axes[0].set_title("λ₂ of Windowed Graph Union G^∪(t; T)")
     axes[0].set_xlabel("Timestep")
     axes[0].set_ylabel("λ₂ of union graph")
     axes[0].legend()
     axes[0].grid(True, linestyle="--", alpha=0.6)
 
-    axes[1].plot(t, cumulative_logtau, color="seagreen", linewidth=2,
-                 marker="o", markersize=3, label="log τ of cumulative union")
-    axes[1].set_title("log τ of Cumulative Graph Union — optimized objective")
+    axes[1].plot(t, lam2_logtau, color="seagreen", linewidth=2,
+                 marker="o", markersize=3, label="log τ of windowed union")
+    axes[1].set_title("log τ of Windowed Graph Union — optimized objective")
     axes[1].set_xlabel("Timestep")
     axes[1].set_ylabel("log τ of union graph")
     axes[1].legend()

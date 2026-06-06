@@ -32,8 +32,10 @@ class SimConfig:
     alpha: float = 0.5                # slewing-cost weight
     bridge_bonus: float = 1e3         # finite utility for a component-bridging link
 
-    # --- Methods to run (subset of: game, furthest, greedy, mdmd) ---
-    methods: list[str] = field(default_factory=lambda: ["game", "furthest"])
+    # --- Methods to run (subset of: game, furthest, centralized) ---
+    methods: list[str] = field(
+        default_factory=lambda: ["game", "furthest", "centralized"]
+    )
 
     # --- Run bookkeeping ---
     quick: bool = False               # record whether this was a quick run

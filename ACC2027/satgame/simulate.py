@@ -11,17 +11,16 @@ from __future__ import annotations
 import numpy as np
 from tqdm import tqdm
 
-from .baselines import greedy_search, greedy_search_furthest, mdmd
+from .baselines import greedy_search_furthest
+from .centralized import centralized_greedy_formation
 from .constellation import build_constellation, calculate_cartesian_coordinates
 from .game import game_theory_formation
 from .geometry import calculate_relative_positions_all, create_field_of_view_matrices
 from .graph import generate_network, windowed_union
 
-# Baseline name -> function (each returns (graph, distances)).
+# Decentralized baseline name -> function (each returns (graph, distances)).
 _BASELINES = {
     "furthest": greedy_search_furthest,
-    "greedy": greedy_search,
-    "mdmd": mdmd,
 }
 
 
@@ -74,9 +73,10 @@ def run_simulation(cfg, trajectory=None, progress: bool = True):
     methods = list(cfg.methods)
     graphs = {m: [] for m in methods}
 
-    # Game state carried across epochs.
-    G_prev = None
-    game_history = []
+    # Stateful policies carry their own history across epochs (each best-responds
+    # against the windowed union of ITS OWN past realized graphs).
+    game_prev, game_history = None, []
+    central_prev, central_history = None, []
 
     iterator = tqdm(trajectory, desc="Simulating network") if progress else trajectory
     for snap in iterator:
@@ -91,14 +91,30 @@ def run_simulation(cfg, trajectory=None, progress: bool = True):
                 positions,
                 snap["relative_positions"],
                 *_fov(snap),
-                G_prev=G_prev,
+                G_prev=game_prev,
                 G_union=G_union,
                 alpha=cfg.alpha,
                 bridge_bonus=cfg.bridge_bonus,
             )
-            G_prev = G_game
+            game_prev = G_game
             game_history.append(G_game)
             graphs["game"].append(G_game)
+
+        if "centralized" in methods:
+            # Same windowed-union objective, optimized centrally with exact marginals.
+            C_union = windowed_union(n, central_history, cfg.window)
+            G_central = centralized_greedy_formation(
+                generate_network(positions),
+                positions,
+                snap["relative_positions"],
+                *_fov(snap),
+                G_prev=central_prev,
+                G_union=C_union,
+                alpha=cfg.alpha,
+            )
+            central_prev = G_central
+            central_history.append(G_central)
+            graphs["centralized"].append(G_central)
 
         for name, fn in _BASELINES.items():
             if name in methods:

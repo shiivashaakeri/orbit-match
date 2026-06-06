@@ -6,7 +6,7 @@ Examples
     python run.py                          # full 1584-sat run, 2000 km ISL
     python run.py --isl-range-km 3000      # wider ISL range
     python run.py --quick                  # fast 60-sat smoke run
-    python run.py --methods game furthest greedy mdmd --save-graphs
+    python run.py --methods game furthest centralized --save-graphs
 
 Each run writes config.json, metrics.csv, and figures to results/<timestamp>/.
 """
@@ -26,7 +26,7 @@ from satgame.graph import union_series
 from satgame.metrics import series_metrics
 from satgame.simulate import run_simulation
 
-ALL_METHODS = ["game", "furthest", "greedy", "mdmd"]
+ALL_METHODS = ["game", "furthest", "centralized"]
 
 
 def parse_args(argv=None):
@@ -50,7 +50,7 @@ def parse_args(argv=None):
                    help="satellites per plane (default: 66, or 10 with --quick)")
     p.add_argument("--quick", action="store_true",
                    help="small 60-sat constellation for fast iteration")
-    p.add_argument("--methods", nargs="+", default=["game", "furthest"],
+    p.add_argument("--methods", nargs="+", default=["game", "furthest", "centralized"],
                    choices=ALL_METHODS, metavar="METHOD",
                    help=f"methods to run (subset of {ALL_METHODS})")
     p.add_argument("--save-graphs", action="store_true",
@@ -137,7 +137,7 @@ def main(argv=None):
 
     plot_comparison(metrics_by_method, out_dir / "comparison.png")
     if "game" in graphs and len(graphs["game"]) > 0:
-        plot_union_lambda2(graphs["game"], out_dir / "union_lambda2.png")
+        plot_union_lambda2(graphs["game"], out_dir / "union_lambda2.png", cfg.window)
 
     if cfg.save_graphs:
         with open(out_dir / "graphs.pkl", "wb") as f:
