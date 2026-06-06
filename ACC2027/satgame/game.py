@@ -143,6 +143,11 @@ def game_theory_formation(
     # angle_prev[(i, direction)] = bearing of last epoch's neighbor in that
     # direction (None if none). The per-endpoint "dir" dict disambiguates the
     # undirected edge.
+    #
+    # Modeling note: theta_prev is taken as the bearing to last epoch's partner
+    # evaluated in the CURRENT frame (a "keep tracking the old neighbor" proxy),
+    # not the exact previous-epoch bearing. Over short epochs the two coincide to
+    # first order; it keeps the slewing cost computable from current geometry.
     angle_prev = {}
     if G_prev is not None:
         for i in range(num_satellites):

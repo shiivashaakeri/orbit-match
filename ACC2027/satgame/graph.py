@@ -42,3 +42,38 @@ def windowed_union(num_satellites, history, window):
     for past in history[-window:]:
         G.add_edges_from(past.edges())
     return G
+
+
+def union_series(graphs, window):
+    """Per-epoch windowed-union graphs G^cup(t; T), for metric evaluation.
+
+    Connectivity metrics must be measured on the windowed-union graph the game
+    targets, not on a single sparse epoch (which is disconnected). Given a
+    method's per-epoch realized snapshots (most recent last), this returns a list
+    of the same length whose ``t``-th entry is the union of snapshots
+    ``[t-window+1 .. t]`` (current epoch included).
+
+    Parameters
+    ----------
+    graphs : list[nx.Graph]
+        Per-epoch realized graphs, most recent last.
+    window : int
+        Horizon T: each union aggregates the last ``window`` snapshots.
+
+    Returns
+    -------
+    list[nx.Graph]
+        One windowed-union graph per epoch, same length as ``graphs``.
+    """
+    if not graphs:
+        return []
+    num_satellites = graphs[0].number_of_nodes()
+    series = []
+    for i in range(len(graphs)):
+        start = max(0, i - window + 1)
+        U = nx.Graph()
+        U.add_nodes_from(range(num_satellites))
+        for past in graphs[start : i + 1]:
+            U.add_edges_from(past.edges())
+        series.append(U)
+    return series

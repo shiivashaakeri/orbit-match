@@ -22,6 +22,7 @@ from pathlib import Path
 
 from config import SimConfig
 from plots import plot_comparison, plot_union_lambda2
+from satgame.graph import union_series
 from satgame.metrics import series_metrics
 from satgame.simulate import run_simulation
 
@@ -81,15 +82,24 @@ def build_config(args) -> SimConfig:
     )
 
 
-def write_metrics_csv(path, metrics_by_method):
+def write_metrics_csv(path, metrics_by_method, snap_max_degree):
+    """Write per-epoch metrics.
+
+    Connectivity columns (lambda2, resistance, logtau) and union_edges /
+    union_max_degree are measured on the windowed-union graph. snap_max_degree is
+    the realized per-epoch degree (on the snapshot) -- it stays <= 4 (the k=4
+    hardware cap), whereas union_max_degree accumulates across the window.
+    """
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["method", "epoch", "lambda2", "resistance", "edges", "max_degree"])
+        w.writerow(["method", "epoch", "lambda2", "resistance", "logtau",
+                    "union_edges", "union_max_degree", "snap_max_degree"])
         for method, m in metrics_by_method.items():
             for epoch in range(len(m["lambda2"])):
                 w.writerow([method, epoch, m["lambda2"][epoch],
-                            m["resistance"][epoch], m["edges"][epoch],
-                            m["max_degree"][epoch]])
+                            m["resistance"][epoch], m["logtau"][epoch],
+                            m["edges"][epoch], m["max_degree"][epoch],
+                            snap_max_degree[method][epoch]])
 
 
 def main(argv=None):
@@ -110,8 +120,20 @@ def main(argv=None):
     elapsed = time.time() - t0
     print(f"Simulation finished in {elapsed:.1f}s")
 
-    metrics_by_method = {m: series_metrics(graphs[m]) for m in graphs}
-    write_metrics_csv(out_dir / "metrics.csv", metrics_by_method)
+    # Evaluate connectivity on the windowed-union graph G^cup(t; T) -- the graph
+    # the game targets -- rather than the sparse, disconnected per-epoch snapshot
+    # (which gives lambda2 = 0 / resistance = inf for the game method).
+    union_by_method = {m: union_series(graphs[m], cfg.window) for m in graphs}
+    metrics_by_method = {m: series_metrics(union_by_method[m]) for m in union_by_method}
+
+    # Per-epoch realized degree (on the snapshot, not the union): verifies the
+    # k=4 hardware cap, which the union max-degree would obscure since it
+    # accumulates across the window.
+    snap_max_degree = {
+        m: [max((d for _, d in G.degree()), default=0) for G in graphs[m]]
+        for m in graphs
+    }
+    write_metrics_csv(out_dir / "metrics.csv", metrics_by_method, snap_max_degree)
 
     plot_comparison(metrics_by_method, out_dir / "comparison.png")
     if "game" in graphs and len(graphs["game"]) > 0:
@@ -121,12 +143,14 @@ def main(argv=None):
         with open(out_dir / "graphs.pkl", "wb") as f:
             pickle.dump(graphs, f)
 
-    # Console summary.
+    # Console summary. Connectivity on the final windowed union; snap deg is the
+    # max realized per-epoch degree (should be <= 4, the hardware cap).
     print(f"\n{'method':>9} {'lambda2 (last)':>15} {'resistance (last)':>18} "
-          f"{'edges (last)':>13} {'max deg':>8}")
+          f"{'logtau (last)':>15} {'union edges':>13} {'snap deg':>9}")
     for method, m in metrics_by_method.items():
         print(f"{method:>9} {m['lambda2'][-1]:>15.5f} {m['resistance'][-1]:>18.1f} "
-              f"{m['edges'][-1]:>13d} {max(m['max_degree']):>8d}")
+              f"{m['logtau'][-1]:>15.4f} {m['edges'][-1]:>13d} "
+              f"{max(snap_max_degree[method]):>9d}")
     print(f"\nResults written to {out_dir}/")
     return out_dir
 

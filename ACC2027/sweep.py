@@ -29,21 +29,32 @@ import matplotlib.pyplot as plt
 import networkx as nx
 
 from config import SimConfig
-from satgame.metrics import series_metrics
+from satgame.graph import union_series
+from satgame.metrics import logtau
 from satgame.simulate import precompute_trajectories, run_simulation
 
 
-def cumulative_union(graphs, n):
-    """Per-epoch cumulative-union lambda_2 and union edge count."""
-    union = nx.Graph()
-    union.add_nodes_from(range(n))
-    l2, edges = [], []
-    for G in graphs:
-        union.add_edges_from(G.edges())
-        connected = nx.number_connected_components(union) == 1
-        l2.append(nx.algebraic_connectivity(union) if connected else 0.0)
-        edges.append(union.number_of_edges())
-    return l2, edges
+def union_curve(graphs, window):
+    """Per-epoch windowed-union lambda_2, log tau, and union edge count.
+
+    Evaluated on the windowed-union graph G^cup(t; T) the game targets (same
+    quantity ``run.py`` reports), so the sweep is consistent with the main run.
+    log tau is the optimized objective; it stays finite even when the union is
+    not yet connected (spanning-forest fallback), unlike lambda_2.
+    """
+    series = union_series(graphs, window)
+    l2, lt, edges = [], [], []
+    for U in series:
+        connected = nx.number_connected_components(U) == 1
+        l2.append(nx.algebraic_connectivity(U) if connected else 0.0)
+        lt.append(logtau(U))
+        edges.append(U.number_of_edges())
+    return l2, lt, edges
+
+
+def mean_snapshot_edges(graphs):
+    """Average realized links per epoch (snapshot edge count) -- a churn proxy."""
+    return sum(G.number_of_edges() for G in graphs) / max(len(graphs), 1)
 
 
 def parse_args(argv=None):
@@ -79,35 +90,36 @@ def main(argv=None):
           f"alphas={a.alphas}")
     traj = precompute_trajectories(cfg0, progress=True)
     fref = run_simulation(cfg0, trajectory=traj, progress=False)["furthest"]
-    f_l2, f_ue = cumulative_union(fref, n)
-    f_ms = series_metrics(fref)
+    f_l2, f_lt, f_ue = union_curve(fref, cfg0.window)
 
     rows = []
     union_curves = {}
+    logtau_curves = {}
     for al in a.alphas:
         cfg = SimConfig(methods=["game"], alpha=al, **base)
         t0 = time.time()
         g = run_simulation(cfg, trajectory=traj, progress=False)["game"]
-        ms = series_metrics(g)
-        l2, ue = cumulative_union(g, n)
+        l2, lt, ue = union_curve(g, cfg.window)
         union_curves[al] = l2
-        print(f"  alpha={al:<5g} final_union_l2={l2[-1]:.4f} union_edges={ue[-1]:5d} "
-              f"mean_snapshot_edges={sum(ms['edges']) / len(ms['edges']):.0f} "
+        logtau_curves[al] = lt
+        print(f"  alpha={al:<5g} final_union_l2={l2[-1]:.4f} "
+              f"final_union_logtau={lt[-1]:.3f} union_edges={ue[-1]:5d} "
+              f"mean_snapshot_edges={mean_snapshot_edges(g):.0f} "
               f"({time.time() - t0:.0f}s)")
         rows.append({
             "alpha": al,
             "final_union_lambda2": l2[-1],
+            "final_union_logtau": lt[-1],
             "union_edges": ue[-1],
-            "mean_snapshot_edges": sum(ms["edges"]) / len(ms["edges"]),
-            "mean_snapshot_lambda2": sum(ms["lambda2"]) / len(ms["lambda2"]),
+            "mean_snapshot_edges": mean_snapshot_edges(g),
         })
 
     rows.append({
         "alpha": "furthest",
         "final_union_lambda2": f_l2[-1],
+        "final_union_logtau": f_lt[-1],
         "union_edges": f_ue[-1],
-        "mean_snapshot_edges": sum(f_ms["edges"]) / len(f_ms["edges"]),
-        "mean_snapshot_lambda2": sum(f_ms["lambda2"]) / len(f_ms["lambda2"]),
+        "mean_snapshot_edges": mean_snapshot_edges(fref),
     })
 
     with open(out / "sweep_summary.csv", "w", newline="") as f:
@@ -116,20 +128,27 @@ def main(argv=None):
         w.writerows(rows)
     (out / "sweep_config.json").write_text(json.dumps({**base, "alphas": a.alphas}, indent=2))
 
-    # Figure 1: cumulative-union lambda_2 vs epoch, one curve per alpha.
+    # Figure 1: windowed-union lambda_2 and log tau vs epoch, one curve per alpha.
     ep = list(range(cfg0.epochs))
-    plt.figure(figsize=(8, 5))
+    fig1, (axa, axb) = plt.subplots(1, 2, figsize=(14, 5))
     for al in a.alphas:
-        plt.plot(ep, union_curves[al], marker="o", label=f"game α={al:g}")
-    plt.plot(ep, f_l2, "k--", marker="s", label="furthest")
-    plt.xlabel("epoch")
-    plt.ylabel("cumulative-union λ₂")
-    plt.title("Windowed-union connectivity vs slewing weight α")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(out / "union_lambda2_vs_alpha.png", dpi=150)
-    plt.close()
+        axa.plot(ep, union_curves[al], marker="o", label=f"game α={al:g}")
+        axb.plot(ep, logtau_curves[al], marker="o", label=f"game α={al:g}")
+    axa.plot(ep, f_l2, "k--", marker="s", label="furthest")
+    axb.plot(ep, f_lt, "k--", marker="s", label="furthest")
+    axa.set_xlabel("epoch")
+    axa.set_ylabel("windowed-union λ₂")
+    axa.set_title("Windowed-union λ₂ vs slewing weight α")
+    axa.legend()
+    axa.grid(alpha=0.3)
+    axb.set_xlabel("epoch")
+    axb.set_ylabel("windowed-union log τ")
+    axb.set_title("Windowed-union log τ (objective) vs α")
+    axb.legend()
+    axb.grid(alpha=0.3)
+    fig1.tight_layout()
+    fig1.savefig(out / "union_lambda2_vs_alpha.png", dpi=150)
+    plt.close(fig1)
 
     # Figure 2: final union lambda_2 and union edge count (churn) vs alpha.
     als = list(a.alphas)
@@ -139,7 +158,7 @@ def main(argv=None):
     ax1.plot(als, fl2, "b-o", label="final union λ₂")
     ax1.axhline(f_l2[-1], color="b", ls=":", alpha=0.6, label="furthest λ₂")
     ax1.set_xlabel("α (slewing weight)")
-    ax1.set_ylabel("final cumulative-union λ₂", color="b")
+    ax1.set_ylabel("final windowed-union λ₂", color="b")
     ax2 = ax1.twinx()
     ax2.plot(als, fue, "r-s", label="union edges (churn)")
     ax2.axhline(f_ue[-1], color="r", ls=":", alpha=0.6)
