@@ -1,0 +1,22 @@
+{
+  "planes": 24,
+  "sats_per_plane": 66,
+  "altitude_km": 550.0,
+  "inclination_deg": 53.0,
+  "isl_range_km": 2000.0,
+  "fov_angle_deg": 60.0,
+  "epochs": 7,
+  "t_end_min": 1.0,
+  "window": 10,
+  "alpha": 0.5,
+  "bridge_bonus": 1000.0,
+  "methods": [
+    "game",
+    "furthest",
+    "centralized"
+  ],
+  "quick": false,
+  "save_graphs": true,
+  "out_dir": null,
+  "n_satellites": 1584
+}
