@@ -53,19 +53,44 @@ and confirms the centralized greedy is a tight ceiling.
 config.py            # SimConfig: every tunable in one dataclass
 run.py               # CLI: flags -> config -> simulate -> save metrics + figures
 sweep.py             # slewing-weight (alpha) sweep
+sweep_br.py          # full best-response experiment (rho x init grid + plots)
 validate_opt.py      # exact-OPT brute force on a tiny instance (ceiling check)
-plots.py             # comparison figure + cumulative-union λ₂ / log τ analysis
+plots.py             # comparison figure + windowed-union λ₂ / log τ analysis
 satgame/
   constellation.py   # Satellite, spacex_constellation, SGP4 propagation
   geometry.py        # relative bearings + field-of-view feasibility
   graph.py           # empty-network + windowed-union / union-series helpers
   baselines.py       # greedy-furthest decentralized baseline
   game.py            # game_theory_formation (the decentralized matching game)
+  best_response.py   # best_response (the noncooperative BR game; rho optimism knob)
   centralized.py     # centralized_greedy_formation (CELF ceiling, exact marginals)
   metrics.py         # algebraic connectivity + effective resistance + log τ
   simulate.py        # trajectory precompute + epoch-by-epoch driver
 results/             # per-run outputs (timestamped)
 ```
+
+## Two link-formation mechanisms for the same game
+
+Same network-formation game (mutual-choice links, k=4, log τ − α·slew), two ways
+to reach an outcome:
+
+- **Matching** (`game.py`) — stable matching (deferred acceptance). Coordinated;
+  no wasted terminals; solution concept = pairwise stability.
+- **Best response** (`best_response.py`) — satellites repeatedly best-respond to
+  each other's current pointings; solution concept = Nash equilibrium. An optimism
+  knob `ρ ∈ [0,1]` controls how non-reciprocated candidates are valued:
+  `ρ=0` (strict) exhibits the **coordination-failure trap** (empty graph is a Nash
+  equilibrium — best response from a cold start stays empty); `ρ→1` (optimistic)
+  escapes it but causes reciprocation failures. `sweep_br.py` sweeps the whole
+  `ρ × {cold,warm}` grid and benchmarks against matching and centralized:
+
+```bash
+python sweep_br.py            # 60-sat, 6000 km (fast)
+python sweep_br.py --full     # 1584-sat, 2000 km (matches the main run)
+```
+
+It writes `br_summary.csv` (table) and `br_sweep.png` (connectivity, reciprocation
+failure, empirical ε-Nash, and convergence vs ρ).
 
 ## The game policy (what `game.py` does)
 
